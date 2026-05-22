@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 
 @dataclass(frozen=True)
@@ -41,9 +43,47 @@ def register_error_handlers(app: FastAPI) -> None:
     async def handle_api_error(request: Request, exc: ApiError) -> JSONResponse:
         return api_error_response(exc)
 
+    @app.exception_handler(StarletteHTTPException)
+    async def handle_http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+        if exc.status_code == 404:
+            return api_error_response(ApiError(type="not_found", message="Resource was not found", status_code=404))
+        return api_error_response(
+            ApiError(
+                type="http_error",
+                message=_safe_http_message(exc.detail),
+                status_code=exc.status_code,
+            )
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def handle_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+        return api_error_response(
+            ApiError(
+                type="validation_error",
+                message="Request validation failed",
+                status_code=422,
+            )
+        )
+
+    @app.exception_handler(Exception)
+    async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
+        return api_error_response(
+            ApiError(
+                type="internal_error",
+                message="Internal server error",
+                status_code=500,
+            )
+        )
+
 
 def api_error_response(error: ApiError) -> JSONResponse:
     return JSONResponse(
         status_code=error.status_code,
         content={"error": {"type": error.type, "message": error.message}},
     )
+
+
+def _safe_http_message(detail: object) -> str:
+    if isinstance(detail, str) and detail.strip():
+        return detail
+    return "HTTP error"

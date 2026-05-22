@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Request
 
@@ -14,20 +14,8 @@ from goldfxgraph.market_data.csv_loader import CsvValidationError
 from goldfxgraph.market_data.current_quote import QuoteProviderError
 from goldfxgraph.persistence.repositories import ForecastRepository
 from goldfxgraph.schemas.forecast import ForecastResult, ResearchRunResult
-from goldfxgraph.workflow.nodes import (
-    WorkflowState,
-    agent_forecast_planning,
-    agent_macro_analysis,
-    agent_news_analysis,
-    agent_risk_analysis,
-    agent_technical_analysis,
-    router_finalize_result,
-    router_validate_request,
-    tool_compute_indicators,
-    tool_fetch_current_gold_quote,
-    tool_load_market_data,
-    tool_persist_forecast,
-)
+from goldfxgraph.workflow.graph import build_forecast_graph
+from goldfxgraph.workflow.nodes import WorkflowState
 
 router = APIRouter()
 
@@ -55,12 +43,11 @@ async def create_research_run(request: Request) -> ResearchRunResult:
         state = await _run_forecast_workflow(request, repository, run_id)
         result_run = await repository.get_research_run(run_id)
     except QuoteProviderError as exc:
-        await _mark_failed(repository, run_id, "Current quote provider is not configured")
+        message = _quote_provider_message(exc)
+        await _mark_failed(repository, run_id, message)
         raise ApiError(
-            type="quote_provider_unconfigured" if "not configured" in str(exc) else "quote_provider_error",
-            message="Current quote provider is not configured"
-            if "not configured" in str(exc)
-            else "Current quote provider request failed",
+            type="quote_provider_unconfigured" if "not configured" in message else "quote_provider_error",
+            message=message,
             status_code=503,
         ) from exc
     except CsvValidationError as exc:
@@ -103,17 +90,9 @@ async def _run_forecast_workflow(
         repository=repository,
         run_id=run_id,
     )
-    state = router_validate_request(state)
-    state = tool_load_market_data(state)
-    state = tool_fetch_current_gold_quote(state)
-    state = tool_compute_indicators(state)
-    state = agent_technical_analysis(state)
-    state = agent_macro_analysis(state)
-    state = agent_news_analysis(state)
-    state = agent_risk_analysis(state)
-    state = agent_forecast_planning(state)
-    state = await tool_persist_forecast(state)
-    return router_finalize_result(state)
+    graph = build_forecast_graph().compile()
+    result = await graph.ainvoke(state)
+    return cast(WorkflowState, result)
 
 
 async def _mark_failed(repository: ForecastRepository, run_id: int, message: str) -> None:
@@ -129,3 +108,10 @@ def _repository(request: Request) -> Any:
     if repository is None:
         raise PersistenceApiError("Forecast repository is not available")
     return repository
+
+
+def _quote_provider_message(exc: QuoteProviderError) -> str:
+    message = str(exc).strip()
+    if not message:
+        return "Current quote provider request failed"
+    return message
