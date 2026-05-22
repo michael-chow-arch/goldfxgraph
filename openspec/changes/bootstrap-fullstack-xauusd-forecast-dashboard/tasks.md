@@ -43,13 +43,13 @@
 
 ## 6. Vue 3 + Tailwind 前端
 
-- [ ] 6.1 在 `apps/web/` 新增 Vite + Vue 3 + TypeScript + Tailwind CSS 项目结构
-- [ ] 6.2 新增 `apps/web/src/styles/main.css`，配置 Tailwind imports 与共享 base styles
-- [ ] 6.3 新增 `apps/web/src/types/forecast.ts`，与后端 forecast contract 对齐
-- [ ] 6.4 新增 `apps/web/src/services/forecastApi.ts`，从 `VITE_API_BASE_URL` 调用 FastAPI，不在 Vue 页面硬编码后端 URL
-- [ ] 6.5 新增 router、constants 和 `GoldForecastDashboard.vue`，展示 current price、direction、confidence、OHLC、entry/take-profit/stop-loss、持有建议、agent summaries、votes、risk notes 和 disclaimer
-- [ ] 6.6 实现 Dashboard loading、error、empty、success 状态和重试入口，不硬编码生产预测假数据
-- [ ] 6.7 运行前端 typecheck/build，并用浏览器或截图检查 Dashboard 在桌面与移动视口下无明显重叠和布局问题
+- [x] 6.1 在 `apps/web/` 新增 Vite + Vue 3 + TypeScript + Tailwind CSS 项目结构
+- [x] 6.2 新增 `apps/web/src/styles/main.css`，配置 Tailwind imports 与共享 base styles
+- [x] 6.3 新增 `apps/web/src/types/forecast.ts`，与后端 forecast contract 对齐
+- [x] 6.4 新增 `apps/web/src/services/forecastApi.ts`，从 `VITE_API_BASE_URL` 调用 FastAPI，不在 Vue 页面硬编码后端 URL
+- [x] 6.5 新增 router、constants 和 `GoldForecastDashboard.vue`，展示 current price、direction、confidence、OHLC、entry/take-profit/stop-loss、持有建议、agent summaries、votes、risk notes 和 disclaimer
+- [x] 6.6 实现 Dashboard loading、error、empty、success 状态和重试入口，不硬编码生产预测假数据
+- [x] 6.7 运行前端 typecheck/build，并用浏览器或截图检查 Dashboard 在桌面与移动视口下无明显重叠和布局问题
 
 ## 7. 验证与收尾
 

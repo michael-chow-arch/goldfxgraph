@@ -1,0 +1,94 @@
+@import url("https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color: #f8fafc;
+    background-color: #020617;
+    font-family: "Fira Sans", system-ui, sans-serif;
+    line-height: 1.5;
+    font-weight: 400;
+    text-rendering: optimizeLegibility;
+    font-synthesis: none;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    background-color: #020617;
+    color: #f8fafc;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    margin: 0;
+    min-width: 320px;
+    min-height: 100vh;
+    background:
+      radial-gradient(circle at top, rgba(34, 197, 94, 0.08), transparent 24%),
+      linear-gradient(180deg, rgba(15, 23, 42, 0.96) 0%, #020617 38%, #020617 100%);
+    color: #f8fafc;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+
+  button {
+    cursor: pointer;
+  }
+
+  #app {
+    min-height: 100vh;
+  }
+
+  ::selection {
+    background-color: rgba(34, 197, 94, 0.35);
+    color: #f8fafc;
+  }
+}
+
+@layer components {
+  .dashboard-panel {
+    @apply border border-slate-800/80 bg-slate-900/75 shadow-glow backdrop-blur-sm;
+  }
+
+  .panel-title {
+    @apply font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400;
+  }
+
+  .metric-label {
+    @apply font-mono text-[11px] uppercase tracking-[0.18em] text-slate-500;
+  }
+
+  .metric-value {
+    @apply font-mono text-lg font-semibold text-slate-50;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
