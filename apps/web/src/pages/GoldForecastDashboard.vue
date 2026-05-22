@@ -191,15 +191,15 @@
             <div class="mt-4 grid gap-3">
               <div class="rounded-md border border-slate-800 bg-slate-950/75 px-4 py-3">
                 <p class="metric-label">Holding period</p>
-                <p class="mt-1 text-sm text-slate-100">{{ forecast.holding_period }}</p>
+                <p class="mt-1 break-words text-sm text-slate-100">{{ forecast.holding_period }}</p>
               </div>
               <div class="rounded-md border border-slate-800 bg-slate-950/75 px-4 py-3">
                 <p class="metric-label">Intraday action</p>
-                <p class="mt-1 text-sm text-slate-100">{{ forecast.intraday_action }}</p>
+                <p class="mt-1 break-words text-sm text-slate-100">{{ forecast.intraday_action }}</p>
               </div>
               <div class="rounded-md border border-slate-800 bg-slate-950/75 px-4 py-3">
                 <p class="metric-label">Long-term action</p>
-                <p class="mt-1 text-sm text-slate-100">{{ forecast.long_term_action }}</p>
+                <p class="mt-1 break-words text-sm text-slate-100">{{ forecast.long_term_action }}</p>
               </div>
             </div>
           </article>
@@ -219,7 +219,7 @@
                 class="rounded-md border border-slate-800 bg-slate-950/75 px-4 py-4 transition-colors duration-200 hover:border-slate-700"
               >
                 <p class="metric-label">{{ section.title }}</p>
-                <p class="mt-2 text-sm leading-6 text-slate-200">{{ section.content }}</p>
+                <p class="mt-2 break-words text-sm leading-6 text-slate-200">{{ section.content }}</p>
               </article>
             </div>
           </article>
@@ -234,7 +234,7 @@
               <li
                 v-for="(note, index) in forecast.risk_notes"
                 :key="`${index}-${note}`"
-                class="rounded-md border border-slate-800 bg-slate-950/75 px-4 py-3 text-sm leading-6 text-slate-200 transition-colors duration-200 hover:border-slate-700"
+                class="rounded-md border border-slate-800 bg-slate-950/75 px-4 py-3 break-words text-sm leading-6 text-slate-200 transition-colors duration-200 hover:border-slate-700"
               >
                 {{ note }}
               </li>
