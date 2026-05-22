@@ -112,10 +112,10 @@
                   </span>
                 </div>
                 <div class="grid gap-2 text-sm text-slate-400 sm:grid-cols-2">
-                  <p>数据来源: <span class="font-mono text-slate-200">{{ forecast.data_source }}</span></p>
-                  <p>行情时间: <span class="font-mono text-slate-200">{{ formatDateTime(forecast.data_timestamp) }}</span></p>
-                  <p>参考时间: <span class="font-mono text-slate-200">{{ formatDateTime(forecast.reference_time) }}</span></p>
-                  <p>Forecast ID: <span class="font-mono text-slate-200">{{ forecast.id ?? "N/A" }}</span></p>
+                  <p class="break-words">数据来源: <span class="font-mono text-slate-200 break-all">{{ forecast.data_source }}</span></p>
+                  <p class="break-words">行情时间: <span class="font-mono text-slate-200 break-all">{{ formatDateTime(forecast.data_timestamp) }}</span></p>
+                  <p class="break-words">参考时间: <span class="font-mono text-slate-200 break-all">{{ formatDateTime(forecast.reference_time) }}</span></p>
+                  <p class="break-words">Forecast ID: <span class="font-mono text-slate-200 break-all">{{ forecast.id ?? "N/A" }}</span></p>
                 </div>
               </div>
 
@@ -156,7 +156,7 @@
               >
                 <dt class="metric-label">{{ metric.label }}</dt>
                 <dd class="mt-1 font-mono text-sm font-medium text-slate-100 sm:text-base">
-                  {{ metric.value }}
+                  <span class="break-all">{{ metric.value }}</span>
                 </dd>
               </div>
             </dl>
@@ -339,7 +339,7 @@
 
           <aside class="dashboard-panel rounded-lg px-5 py-6 sm:px-6 xl:w-[320px]">
             <p class="panel-title">Disclaimer</p>
-            <p class="mt-4 text-sm leading-6 text-slate-300">
+            <p class="mt-4 break-words text-sm leading-6 text-slate-300">
               {{ forecast.disclaimer }}
             </p>
           </aside>
