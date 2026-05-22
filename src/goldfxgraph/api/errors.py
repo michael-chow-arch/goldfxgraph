@@ -47,10 +47,14 @@ def register_error_handlers(app: FastAPI) -> None:
     async def handle_http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
         if exc.status_code == 404:
             return api_error_response(ApiError(type="not_found", message="Resource was not found", status_code=404))
+        if exc.status_code == 405:
+            return api_error_response(
+                ApiError(type="method_not_allowed", message="HTTP method is not allowed", status_code=405)
+            )
         return api_error_response(
             ApiError(
                 type="http_error",
-                message=_safe_http_message(exc.detail),
+                message="HTTP request failed",
                 status_code=exc.status_code,
             )
         )
@@ -81,9 +85,3 @@ def api_error_response(error: ApiError) -> JSONResponse:
         status_code=error.status_code,
         content={"error": {"type": error.type, "message": error.message}},
     )
-
-
-def _safe_http_message(detail: object) -> str:
-    if isinstance(detail, str) and detail.strip():
-        return detail
-    return "HTTP error"
