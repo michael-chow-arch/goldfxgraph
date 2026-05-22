@@ -1,0 +1,1 @@
+"""Technical indicator package."""
