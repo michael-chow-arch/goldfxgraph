@@ -44,9 +44,7 @@ def load_xauusd_daily_csv(path: Path) -> MarketDataSet:
     if "volume" in normalized.columns:
         normalized["volume"] = pd.to_numeric(normalized["volume"], errors="coerce")
 
-    invalid_columns = [
-        column for column in ["date", "open", "high", "low", "close"] if normalized[column].isna().any()
-    ]
+    invalid_columns = [column for column in ["date", "open", "high", "low", "close"] if normalized[column].isna().any()]
     if invalid_columns:
         raise CsvValidationError(f"CSV contains invalid data in columns: {', '.join(invalid_columns)}")
 
