@@ -8,10 +8,11 @@ from goldfxgraph.indicators.technical import compute_technical_indicators
 from goldfxgraph.packages.common.settings import GoldFXGraphSettings
 from goldfxgraph.persistence.database import create_session_factory, init_models
 from goldfxgraph.persistence.repositories import ForecastRepository
-from goldfxgraph.schemas.forecast import CurrentQuote, DailyBar, ForecastDirection
+from goldfxgraph.schemas.forecast import AgentVote, CurrentQuote, DailyBar, ForecastDirection
 from goldfxgraph.workflow.graph import REQUIRED_NODE_NAMES, build_forecast_graph
 from goldfxgraph.workflow.nodes import (
     WorkflowState,
+    agent_forecast_planning,
     agent_macro_analysis,
     agent_technical_analysis,
     create_research_forecast_from_inputs,
@@ -125,6 +126,58 @@ def test_agent_node_uses_deterministic_fallback_without_agent_api() -> None:
     assert technical_summary.startswith("当前报价")
     assert agent_votes is not None
     assert agent_votes[0].agent == "technical"
+
+
+def test_forecast_planning_aligns_direction_and_levels_with_agent_votes() -> None:
+    bars = _bars()
+    quote = _quote()
+    indicators = compute_technical_indicators(bars)
+    deterministic = create_research_forecast_from_inputs(
+        latest_bar=bars[-1],
+        quote=quote,
+        indicators=indicators,
+    )
+    assert deterministic.direction == ForecastDirection.bullish
+
+    state = WorkflowState(
+        latest_bar=bars[-1],
+        quote=quote,
+        indicators=indicators,
+        agent_votes=[
+            AgentVote(agent="technical", direction=ForecastDirection.bearish, confidence=0.9, rationale="远程技术看空"),
+            AgentVote(agent="macro", direction=ForecastDirection.bearish, confidence=0.8, rationale="远程宏观看空"),
+            AgentVote(agent="risk", direction=ForecastDirection.neutral, confidence=0.7, rationale="风险中性"),
+        ],
+        technical_summary="远程技术看空",
+        macro_summary="远程宏观看空",
+        risk_summary="风险中性",
+    )
+
+    state = agent_forecast_planning(state)
+    forecast = state.get("forecast")
+
+    assert forecast is not None
+    assert forecast.direction == ForecastDirection.bearish
+    assert forecast.confidence_score == pytest.approx(0.8)
+    assert forecast.entry_price is not None
+    assert forecast.take_profit_price is not None
+    assert forecast.stop_loss_price is not None
+    assert forecast.take_profit_price < forecast.entry_price < forecast.stop_loss_price
+    assert "偏空" in forecast.intraday_action
+    assert "防守或空头" in forecast.long_term_action
+
+
+def test_agent_api_invalid_json_raises_controlled_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"not-json")
+
+    state = WorkflowState(
+        settings=GoldFXGraphSettings(agent_api_base_url="https://agent.example.test/v1"),
+        agent_http_transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(ValueError, match="agent API returned invalid JSON payload for macro"):
+        agent_macro_analysis(state)
 
 
 @pytest.mark.asyncio

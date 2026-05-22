@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from json import JSONDecodeError
 from pathlib import Path
 from typing import Any, Protocol, TypedDict
 
@@ -264,14 +265,28 @@ def agent_risk_analysis(state: WorkflowState) -> WorkflowState:
 
 
 def agent_forecast_planning(state: WorkflowState) -> WorkflowState:
+    latest_bar = _required(state, "latest_bar")
+    quote = _required(state, "quote")
+    indicators = _required(state, "indicators")
     forecast = create_research_forecast_from_inputs(
-        latest_bar=_required(state, "latest_bar"),
-        quote=_required(state, "quote"),
-        indicators=_required(state, "indicators"),
+        latest_bar=latest_bar,
+        quote=quote,
+        indicators=indicators,
     )
 
     agent_votes = state.get("agent_votes")
     if agent_votes:
+        direction, confidence_score = _aggregate_agent_votes(agent_votes)
+        atr = _usable_atr(indicators, latest_bar, quote.current_price)
+        entry_price, take_profit_price, stop_loss_price = _research_levels(quote.current_price, atr, direction)
+        forecast.direction = direction
+        forecast.confidence_score = confidence_score
+        forecast.entry_price = entry_price
+        forecast.take_profit_price = take_profit_price
+        forecast.stop_loss_price = stop_loss_price
+        forecast.holding_period = _holding_period(direction, atr, quote.current_price)
+        forecast.intraday_action = _intraday_action(direction, entry_price, take_profit_price, stop_loss_price)
+        forecast.long_term_action = _long_term_action(direction)
         forecast.agent_votes = agent_votes
     if "technical_summary" in state:
         forecast.technical_summary = state["technical_summary"]
@@ -438,6 +453,23 @@ def _combined_confidence(agent_votes: list[AgentVote], indicators: TechnicalIndi
     return round(min(max(average, 0.2), 0.85), 2)
 
 
+def _aggregate_agent_votes(agent_votes: list[AgentVote]) -> tuple[ForecastDirection, float]:
+    if not agent_votes:
+        return ForecastDirection.neutral, 0.35
+
+    weighted_scores = {direction: 0.0 for direction in ForecastDirection}
+    for vote in agent_votes:
+        weighted_scores[vote.direction] += vote.confidence
+
+    # 使用 confidence 加权得分决定方向；confidence_score 保留所有 agent 的平均置信度，避免单一高置信票吞掉分歧。
+    direction = max(
+        ForecastDirection,
+        key=lambda candidate: (weighted_scores[candidate], candidate == ForecastDirection.neutral),
+    )
+    confidence_score = sum(vote.confidence for vote in agent_votes) / len(agent_votes)
+    return direction, round(min(max(confidence_score, 0.2), 0.85), 2)
+
+
 def _risk_vote_direction(direction: ForecastDirection, atr: float, price: float) -> ForecastDirection:
     if atr / price > 0.02:
         return ForecastDirection.neutral
@@ -504,6 +536,11 @@ def _remote_agent_response(state: WorkflowState, agent_name: str) -> AgentApiRes
             data = response.json()
     except httpx.HTTPError as exc:
         raise ValueError(f"agent API request failed for {agent_name}") from exc
+    except JSONDecodeError as exc:
+        raise ValueError(f"agent API returned invalid JSON payload for {agent_name}") from exc
+
+    if not isinstance(data, dict):
+        raise ValueError(f"agent API returned invalid structured result for {agent_name}")
 
     try:
         return AgentApiResponse.model_validate(data)
