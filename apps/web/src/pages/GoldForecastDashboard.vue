@@ -255,7 +255,43 @@
               <span class="font-mono text-xs uppercase tracking-[0.18em] text-slate-500">Consensus matrix</span>
             </div>
 
-            <div class="mt-4 overflow-hidden rounded-md border border-slate-800">
+            <div class="mt-4 space-y-3 lg:hidden">
+              <article
+                v-for="vote in forecast.agent_votes"
+                :key="`${vote.agent}-${vote.rationale}`"
+                class="rounded-md border border-slate-800 bg-slate-950/75 px-4 py-4"
+              >
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <p class="font-mono text-sm font-semibold text-slate-100">{{ agentLabel(vote.agent) }}</p>
+                  <span
+                    class="inline-flex min-h-8 items-center rounded-md border px-2.5 py-1 font-mono text-xs font-medium"
+                    :class="DIRECTION_STYLES[vote.direction]"
+                  >
+                    {{ DIRECTION_LABELS[vote.direction] }}
+                  </span>
+                </div>
+
+                <dl class="mt-4 grid gap-3">
+                  <div class="rounded-md border border-slate-800/80 bg-slate-900/55 px-3 py-2.5">
+                    <dt class="metric-label">Confidence</dt>
+                    <dd class="mt-1 font-mono text-sm text-slate-200">{{ formatPercent(vote.confidence) }}</dd>
+                  </div>
+                  <div class="rounded-md border border-slate-800/80 bg-slate-900/55 px-3 py-2.5">
+                    <dt class="metric-label">Rationale</dt>
+                    <dd class="mt-1 break-words text-sm leading-6 text-slate-300">{{ vote.rationale }}</dd>
+                  </div>
+                </dl>
+              </article>
+
+              <div
+                v-if="forecast.agent_votes.length === 0"
+                class="rounded-md border border-dashed border-slate-800 bg-slate-950/55 px-4 py-6 text-center text-sm text-slate-500"
+              >
+                当前结果未返回 agent votes。
+              </div>
+            </div>
+
+            <div class="mt-4 hidden overflow-x-auto rounded-md border border-slate-800 lg:block">
               <table class="min-w-full divide-y divide-slate-800">
                 <thead class="bg-slate-950/90">
                   <tr>
@@ -289,7 +325,7 @@
                       </span>
                     </td>
                     <td class="px-4 py-3 font-mono text-sm text-slate-200">{{ formatPercent(vote.confidence) }}</td>
-                    <td class="px-4 py-3 text-sm leading-6 text-slate-300">{{ vote.rationale }}</td>
+                    <td class="px-4 py-3 text-sm leading-6 text-slate-300 break-words">{{ vote.rationale }}</td>
                   </tr>
                   <tr v-if="forecast.agent_votes.length === 0">
                     <td colspan="4" class="px-4 py-6 text-center text-sm text-slate-500">

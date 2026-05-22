@@ -1,7 +1,5 @@
 import type { ForecastResult } from "@/types/forecast";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
-
 interface ApiErrorEnvelope {
   error?: {
     type?: string;
@@ -9,8 +7,18 @@ interface ApiErrorEnvelope {
   };
 }
 
+function apiBaseUrl(): string {
+  const baseUrl = import.meta.env.VITE_API_BASE_URL?.trim();
+
+  if (!baseUrl) {
+    throw new Error("缺少 VITE_API_BASE_URL 配置，无法连接 GoldFXGraph backend。");
+  }
+
+  return baseUrl.replace(/\/$/, "");
+}
+
 function buildUrl(path: string): string {
-  return `${API_BASE_URL.replace(/\/$/, "")}${path}`;
+  return `${apiBaseUrl()}${path}`;
 }
 
 export async function fetchLatestForecast(): Promise<ForecastResult | null> {
