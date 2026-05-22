@@ -65,8 +65,10 @@ async def create_research_run(request: Request) -> ResearchRunResult:
         raise PersistenceApiError() from exc
 
     if result_run is None:
+        await _mark_failed(repository, run_id, "Workflow did not return a research run")
         raise PersistenceApiError("Research run could not be loaded after workflow completion")
     if state.get("result") is None or result_run.forecast is None:
+        await _mark_failed(repository, run_id, "Workflow did not produce a forecast result")
         raise ApiError(type="workflow_error", message="Forecast workflow did not produce a result", status_code=502)
     return result_run
 
@@ -90,7 +92,7 @@ async def _run_forecast_workflow(
         repository=repository,
         run_id=run_id,
     )
-    graph = build_forecast_graph().compile()
+    graph = _compiled_forecast_graph(request)
     result = await graph.ainvoke(state)
     return cast(WorkflowState, result)
 
@@ -115,3 +117,11 @@ def _quote_provider_message(exc: QuoteProviderError) -> str:
     if not message:
         return "Current quote provider request failed"
     return message
+
+
+def _compiled_forecast_graph(request: Request) -> Any:
+    graph = getattr(request.app.state, "compiled_forecast_graph", None)
+    if graph is None:
+        graph = build_forecast_graph().compile()
+        request.app.state.compiled_forecast_graph = graph
+    return graph

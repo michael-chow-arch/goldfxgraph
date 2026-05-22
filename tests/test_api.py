@@ -6,6 +6,7 @@ from typing import Any, cast
 
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from goldfxgraph.api import routes
 from goldfxgraph.api.app import create_app
@@ -96,6 +97,22 @@ def test_path_validation_returns_structured_422() -> None:
     assert "detail" not in response.json()
 
 
+def test_http_exception_detail_is_not_leaked() -> None:
+    app = create_app(testing=True)
+
+    @app.get("/api/v1/leaky")
+    async def leaky_route() -> None:
+        raise StarletteHTTPException(status_code=409, detail="internal-secret-token")
+
+    client = TestClient(app)
+
+    response = client.get("/api/v1/leaky")
+
+    assert response.status_code == 409
+    assert response.json() == {"error": {"type": "http_error", "message": "HTTP request failed"}}
+    assert "internal-secret-token" not in response.text
+
+
 def test_create_research_run_returns_structured_error_when_quote_provider_unconfigured(tmp_path: Path) -> None:
     csv_path = _write_csv(tmp_path)
     repository = InMemoryForecastRepository()
@@ -116,18 +133,46 @@ def test_create_research_run_returns_structured_error_when_quote_provider_unconf
     assert repository.runs[1].status == "failed"
 
 
-def test_create_research_run_uses_langgraph_workflow(monkeypatch: Any) -> None:
+def test_create_research_run_uses_cached_langgraph_workflow(monkeypatch: Any) -> None:
     repository = InMemoryForecastRepository()
-    invoked = False
+    compile_count = 0
+    invoke_count = 0
 
     class FakeCompiledGraph:
         async def ainvoke(self, state: dict[str, Any]) -> dict[str, Any]:
-            nonlocal invoked
-            invoked = True
+            nonlocal invoke_count
+            invoke_count += 1
             forecast = _forecast()
             saved = await state["repository"].save_forecast(state["run_id"], forecast)
             await state["repository"].mark_run_success(state["run_id"])
             return {**state, "result": saved, "forecast": saved}
+
+    class FakeGraph:
+        def compile(self) -> FakeCompiledGraph:
+            nonlocal compile_count
+            compile_count += 1
+            return FakeCompiledGraph()
+
+    monkeypatch.setattr(routes, "build_forecast_graph", lambda: FakeGraph())
+    client = TestClient(create_app(testing=True, repository=cast(ForecastRepository, repository)))
+
+    response = client.post("/api/v1/research-runs")
+    second_response = client.post("/api/v1/research-runs")
+
+    assert response.status_code == 200
+    assert second_response.status_code == 200
+    assert compile_count == 1
+    assert invoke_count == 2
+    assert response.json()["status"] == "success"
+    assert response.json()["forecast"]["direction"] == "bullish"
+
+
+def test_invalid_workflow_terminal_state_marks_run_failed(monkeypatch: Any) -> None:
+    repository = InMemoryForecastRepository()
+
+    class FakeCompiledGraph:
+        async def ainvoke(self, state: dict[str, Any]) -> dict[str, Any]:
+            return {**state, "result": None, "forecast": None}
 
     class FakeGraph:
         def compile(self) -> FakeCompiledGraph:
@@ -138,10 +183,10 @@ def test_create_research_run_uses_langgraph_workflow(monkeypatch: Any) -> None:
 
     response = client.post("/api/v1/research-runs")
 
-    assert response.status_code == 200
-    assert invoked is True
-    assert response.json()["status"] == "success"
-    assert response.json()["forecast"]["direction"] == "bullish"
+    assert response.status_code == 502
+    assert response.json()["error"]["type"] == "workflow_error"
+    assert repository.runs[1].status == "failed"
+    assert repository.runs[1].error_message == "Workflow did not produce a forecast result"
 
 
 def test_configured_quote_provider_failure_records_sanitized_error(tmp_path: Path) -> None:
