@@ -1,14 +1,19 @@
 from datetime import UTC, date, datetime
 
+import httpx
 import pytest
+from pydantic import SecretStr
 
 from goldfxgraph.indicators.technical import compute_technical_indicators
+from goldfxgraph.packages.common.settings import GoldFXGraphSettings
 from goldfxgraph.persistence.database import create_session_factory, init_models
 from goldfxgraph.persistence.repositories import ForecastRepository
 from goldfxgraph.schemas.forecast import CurrentQuote, DailyBar, ForecastDirection
 from goldfxgraph.workflow.graph import REQUIRED_NODE_NAMES, build_forecast_graph
 from goldfxgraph.workflow.nodes import (
     WorkflowState,
+    agent_macro_analysis,
+    agent_technical_analysis,
     create_research_forecast_from_inputs,
     tool_persist_forecast,
     tool_persist_research_run,
@@ -58,6 +63,68 @@ def test_forecast_planning_output_is_structured() -> None:
     assert forecast.agent_votes
     assert forecast.risk_notes
     assert "不构成金融建议" in forecast.disclaimer
+
+
+def test_agent_node_uses_configured_agent_api_without_leaking_key() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.headers["authorization"] == "Bearer secret-token"
+        assert "secret-token" not in request.content.decode()
+        return httpx.Response(
+            200,
+            json={
+                "summary": "远程宏观摘要：美元与实际利率压力偏空。",
+                "direction": "bearish",
+                "confidence": 0.62,
+            },
+        )
+
+    settings = GoldFXGraphSettings(
+        agent_api_base_url="https://agent.example.test/v1",
+        agent_api_key=SecretStr("secret-token"),
+    )
+    state = WorkflowState(settings=settings, agent_http_transport=httpx.MockTransport(handler))
+
+    state = agent_macro_analysis(state)
+
+    assert len(requests) == 1
+    assert str(requests[0].url) == "https://agent.example.test/v1/agents/macro"
+    agent_votes = state.get("agent_votes")
+    assert state.get("macro_summary") == "远程宏观摘要：美元与实际利率压力偏空。"
+    assert agent_votes is not None
+    assert agent_votes[0].direction == ForecastDirection.bearish
+    assert agent_votes[0].confidence == 0.62
+    assert "secret-token" not in str(state)
+
+
+def test_agent_node_uses_deterministic_fallback_without_agent_api() -> None:
+    bars = _bars()
+    called = False
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal called
+        called = True
+        raise AssertionError("agent API should not be called without configured base URL")
+
+    state = WorkflowState(
+        settings=GoldFXGraphSettings(agent_api_base_url=None),
+        latest_bar=bars[-1],
+        quote=_quote(),
+        indicators=compute_technical_indicators(bars),
+        agent_http_transport=httpx.MockTransport(handler),
+    )
+
+    state = agent_technical_analysis(state)
+
+    assert called is False
+    agent_votes = state.get("agent_votes")
+    technical_summary = state.get("technical_summary")
+    assert technical_summary is not None
+    assert technical_summary.startswith("当前报价")
+    assert agent_votes is not None
+    assert agent_votes[0].agent == "technical"
 
 
 @pytest.mark.asyncio

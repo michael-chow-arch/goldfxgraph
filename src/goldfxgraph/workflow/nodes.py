@@ -4,6 +4,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, TypedDict
 
+import httpx
+from pydantic import BaseModel, Field, ValidationError
+
 from goldfxgraph.indicators.technical import compute_technical_indicators
 from goldfxgraph.market_data.csv_loader import load_xauusd_daily_csv
 from goldfxgraph.market_data.current_quote import CurrentQuoteProvider
@@ -28,6 +31,7 @@ class WorkflowState(TypedDict, total=False):
     settings: GoldFXGraphSettings
     csv_path: Path | str
     quote_provider: QuoteProvider
+    agent_http_transport: httpx.BaseTransport
     repository: ForecastRepository
     market_data: MarketDataSet
     bars: list[DailyBar]
@@ -48,6 +52,13 @@ class WorkflowState(TypedDict, total=False):
 
 
 RESEARCH_DISCLAIMER = "本结果仅用于研究和决策支持，不构成金融建议、投资建议或交易指令。"
+
+
+class AgentApiResponse(BaseModel):
+    summary: str
+    direction: ForecastDirection
+    confidence: float = Field(ge=0, le=1)
+    risk_notes: list[str] = Field(default_factory=list)
 
 
 def create_research_forecast_from_inputs(
@@ -175,12 +186,15 @@ def agent_technical_analysis(state: WorkflowState) -> WorkflowState:
     latest_bar = _required(state, "latest_bar")
     quote = _required(state, "quote")
     indicators = _required(state, "indicators")
-    direction = _direction_from_inputs(quote.current_price, latest_bar, indicators)
+    remote = _remote_agent_response(state, "technical")
+    direction = remote.direction if remote else _direction_from_inputs(quote.current_price, latest_bar, indicators)
     vote = AgentVote(
         agent="technical",
         direction=direction,
-        confidence=_technical_confidence(indicators, direction),
-        rationale=_technical_summary(quote.current_price, latest_bar, indicators, direction),
+        confidence=remote.confidence if remote else _technical_confidence(indicators, direction),
+        rationale=remote.summary
+        if remote
+        else _technical_summary(quote.current_price, latest_bar, indicators, direction),
     )
     return {
         **state,
@@ -190,14 +204,30 @@ def agent_technical_analysis(state: WorkflowState) -> WorkflowState:
 
 
 def agent_macro_analysis(state: WorkflowState) -> WorkflowState:
-    summary = "宏观 agent 暂未调用外部实时宏观源，当前输出保持中性，并要求后续版本记录可验证来源。"
-    vote = AgentVote(agent="macro", direction=ForecastDirection.neutral, confidence=0.35, rationale=summary)
+    remote = _remote_agent_response(state, "macro")
+    summary = (
+        remote.summary
+        if remote
+        else "宏观 agent 暂未调用外部实时宏观源，当前输出保持中性，并要求后续版本记录可验证来源。"
+    )
+    vote = AgentVote(
+        agent="macro",
+        direction=remote.direction if remote else ForecastDirection.neutral,
+        confidence=remote.confidence if remote else 0.35,
+        rationale=summary,
+    )
     return {**state, "macro_summary": summary, "agent_votes": [*_existing_votes_without(state, "macro"), vote]}
 
 
 def agent_news_analysis(state: WorkflowState) -> WorkflowState:
-    summary = "新闻 agent 暂未调用外部实时新闻源，当前不使用未验证新闻作为方向依据。"
-    vote = AgentVote(agent="news", direction=ForecastDirection.neutral, confidence=0.35, rationale=summary)
+    remote = _remote_agent_response(state, "news")
+    summary = remote.summary if remote else "新闻 agent 暂未调用外部实时新闻源，当前不使用未验证新闻作为方向依据。"
+    vote = AgentVote(
+        agent="news",
+        direction=remote.direction if remote else ForecastDirection.neutral,
+        confidence=remote.confidence if remote else 0.35,
+        rationale=summary,
+    )
     return {**state, "news_summary": summary, "agent_votes": [*_existing_votes_without(state, "news"), vote]}
 
 
@@ -206,16 +236,23 @@ def agent_risk_analysis(state: WorkflowState) -> WorkflowState:
     quote = _required(state, "quote")
     indicators = _required(state, "indicators")
     atr = _usable_atr(indicators, latest_bar, quote.current_price)
-    notes = _risk_notes(latest_bar, indicators, atr)
-    summary = "风险 agent 基于 ATR、日线区间与指标缺失情况生成结构化提示，不触发任何交易执行。"
+    remote = _remote_agent_response(state, "risk")
+    notes = remote.risk_notes if remote and remote.risk_notes else _risk_notes(latest_bar, indicators, atr)
+    summary = (
+        remote.summary
+        if remote
+        else "风险 agent 基于 ATR、日线区间与指标缺失情况生成结构化提示，不触发任何交易执行。"
+    )
     vote = AgentVote(
         agent="risk",
-        direction=_risk_vote_direction(
+        direction=remote.direction
+        if remote
+        else _risk_vote_direction(
             _direction_from_inputs(quote.current_price, latest_bar, indicators),
             atr,
             quote.current_price,
         ),
-        confidence=0.55,
+        confidence=remote.confidence if remote else 0.55,
         rationale=summary,
     )
     return {
@@ -442,6 +479,56 @@ def _long_term_action(direction: ForecastDirection) -> str:
 
 def _existing_votes_without(state: WorkflowState, agent_name: str) -> list[AgentVote]:
     return [vote for vote in state.get("agent_votes", []) if vote.agent != agent_name]
+
+
+def _remote_agent_response(state: WorkflowState, agent_name: str) -> AgentApiResponse | None:
+    settings = state.get("settings") or get_settings()
+    if not settings.agent_api_base_url:
+        return None
+
+    headers: dict[str, str] = {}
+    if settings.agent_api_key:
+        headers["Authorization"] = f"Bearer {settings.agent_api_key.get_secret_value()}"
+
+    # 只发送可验证的市场/指标上下文，不把 secret 或 settings 放进 payload。
+    payload = _agent_payload(state, agent_name)
+    transport = state.get("agent_http_transport")
+    client_kwargs: dict[str, Any] = {"timeout": 10}
+    if transport is not None:
+        client_kwargs["transport"] = transport
+
+    try:
+        with httpx.Client(**client_kwargs) as client:
+            response = client.post(_agent_url(settings.agent_api_base_url, agent_name), json=payload, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+    except httpx.HTTPError as exc:
+        raise ValueError(f"agent API request failed for {agent_name}") from exc
+
+    try:
+        return AgentApiResponse.model_validate(data)
+    except ValidationError as exc:
+        raise ValueError(f"agent API returned invalid structured result for {agent_name}") from exc
+
+
+def _agent_url(base_url: str, agent_name: str) -> str:
+    return f"{base_url.rstrip('/')}/agents/{agent_name}"
+
+
+def _agent_payload(state: WorkflowState, agent_name: str) -> dict[str, object]:
+    latest_bar = state.get("latest_bar")
+    quote = state.get("quote")
+    indicators = state.get("indicators")
+    payload: dict[str, object] = {"agent": agent_name, "symbol": "XAUUSD"}
+    if latest_bar:
+        payload["latest_bar"] = latest_bar.model_dump(mode="json")
+        payload["symbol"] = latest_bar.symbol
+    if quote:
+        payload["quote"] = quote.model_dump(mode="json")
+        payload["symbol"] = quote.symbol
+    if indicators:
+        payload["indicators"] = indicators.model_dump(mode="json")
+    return payload
 
 
 def _input_summary(state: WorkflowState) -> dict[str, object]:
