@@ -30,19 +30,38 @@ class GoldFXGraphSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="GOLDFXGRAPH_", extra="ignore", populate_by_name=True)
 
 
+_ENV_FILE_FIELD_KEYS: dict[str, tuple[str, ...]] = {
+    "env": ("GOLDFXGRAPH_ENV",),
+    "log_level": ("GOLDFXGRAPH_LOG_LEVEL",),
+    "database_url": ("GOLDFXGRAPH_DATABASE_URL", "DATABASE_URL"),
+    "xauusd_csv_path": ("GOLDFXGRAPH_XAUUSD_CSV_PATH",),
+    "current_quote_url": ("GOLDFXGRAPH_CURRENT_QUOTE_URL",),
+    "current_quote_api_key": ("GOLDFXGRAPH_CURRENT_QUOTE_API_KEY",),
+    "agent_api_base_url": ("GOLDFXGRAPH_AGENT_API_BASE_URL",),
+    "agent_api_key": ("GOLDFXGRAPH_AGENT_API_KEY",),
+    "openai_api_key": ("GOLDFXGRAPH_OPENAI_API_KEY", "OPENAI_API_KEY"),
+    "openai_model": ("GOLDFXGRAPH_OPENAI_MODEL",),
+    "openai_base_url": ("GOLDFXGRAPH_OPENAI_BASE_URL",),
+}
+
+
 def _settings_values_from_env_file(env_file: Path) -> dict[str, Any]:
     values: dict[str, Any] = {}
     if not env_file.exists():
         return values
 
-    for key, value in dotenv_values(env_file).items():
-        if value is None or not key.startswith("GOLDFXGRAPH_"):
-            continue
-        if key in os.environ:
+    env_file_values = dotenv_values(env_file)
+    for field_name, keys in _ENV_FILE_FIELD_KEYS.items():
+        if any(key in os.environ for key in keys):
             continue
 
-        field_name = key.removeprefix("GOLDFXGRAPH_").lower()
-        values[field_name] = value if value != "" else None
+        for key in keys:
+            value = env_file_values.get(key)
+            if value is None:
+                continue
+
+            values[field_name] = value if value != "" else None
+            break
 
     return values
 

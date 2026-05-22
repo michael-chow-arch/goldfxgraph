@@ -91,3 +91,47 @@ def test_settings_prefers_goldfxgraph_database_url_over_legacy_alias(monkeypatch
     settings = GoldFXGraphSettings()
 
     assert settings.database_url == "postgresql+asyncpg://preferred:pw@localhost:5432/preferred_db"
+
+
+def test_load_settings_supports_legacy_aliases_from_env_file(tmp_path: Path) -> None:
+    env_file = tmp_path / "dev.env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "DATABASE_URL=postgresql+asyncpg://legacy:pw@localhost:5432/legacy_db",
+                "OPENAI_API_KEY=legacy-openai-key",
+                "GOLDFXGRAPH_OPENAI_MODEL=gpt-5.1",
+                "GOLDFXGRAPH_OPENAI_BASE_URL=https://api.zhizengzeng.com/v1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(env_file=env_file)
+
+    assert settings.database_url == "postgresql+asyncpg://legacy:pw@localhost:5432/legacy_db"
+    assert settings.openai_api_key is not None
+    assert settings.openai_api_key.get_secret_value() == "legacy-openai-key"
+    assert settings.openai_model == "gpt-5.1"
+    assert settings.openai_base_url == "https://api.zhizengzeng.com/v1"
+
+
+def test_load_settings_prefers_goldfxgraph_keys_over_legacy_aliases_in_env_file(tmp_path: Path) -> None:
+    env_file = tmp_path / "dev.env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "DATABASE_URL=postgresql+asyncpg://legacy:pw@localhost:5432/legacy_db",
+                "GOLDFXGRAPH_DATABASE_URL=postgresql+asyncpg://preferred:pw@localhost:5432/preferred_db",
+                "OPENAI_API_KEY=legacy-openai-key",
+                "GOLDFXGRAPH_OPENAI_API_KEY=preferred-openai-key",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(env_file=env_file)
+
+    assert settings.database_url == "postgresql+asyncpg://preferred:pw@localhost:5432/preferred_db"
+    assert settings.openai_api_key is not None
+    assert settings.openai_api_key.get_secret_value() == "preferred-openai-key"
