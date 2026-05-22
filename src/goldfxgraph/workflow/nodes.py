@@ -240,9 +240,7 @@ def agent_risk_analysis(state: WorkflowState) -> WorkflowState:
     remote = _remote_agent_response(state, "risk")
     notes = remote.risk_notes if remote and remote.risk_notes else _risk_notes(latest_bar, indicators, atr)
     summary = (
-        remote.summary
-        if remote
-        else "风险 agent 基于 ATR、日线区间与指标缺失情况生成结构化提示，不触发任何交易执行。"
+        remote.summary if remote else "风险 agent 基于 ATR、日线区间与指标缺失情况生成结构化提示，不触发任何交易执行。"
     )
     vote = AgentVote(
         agent="risk",

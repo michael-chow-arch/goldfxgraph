@@ -53,8 +53,8 @@
 
 ## 7. 验证与收尾
 
-- [ ] 7.1 运行 `openspec validate bootstrap-fullstack-xauusd-forecast-dashboard --strict` 或当前 CLI 支持的等效校验
-- [ ] 7.2 运行后端测试与检查：`pytest`、`ruff check .`、`ruff format --check .`、`pyright` 或项目实际可用命令
-- [ ] 7.3 运行前端检查：`npm run typecheck`、`npm run build`，如配置了 lint 则运行 `npm run lint`
-- [ ] 7.4 检查 git diff，确认未提交 secret、未引入自动交易/下单/券商/n8n/MCP/多模型路由/scorecard/完整评估系统
-- [ ] 7.5 更新 `tasks.md` 勾选已完成项，并准备人工 review 后再 archive OpenSpec change
+- [x] 7.1 运行 `openspec validate bootstrap-fullstack-xauusd-forecast-dashboard --strict` 或当前 CLI 支持的等效校验
+- [x] 7.2 运行后端测试与检查：`pytest`、`ruff check .`、`ruff format --check .`、`pyright` 或项目实际可用命令
+- [x] 7.3 运行前端检查：`npm run typecheck`、`npm run build`，如配置了 lint 则运行 `npm run lint`
+- [x] 7.4 检查 git diff，确认未提交 secret、未引入自动交易/下单/券商/n8n/MCP/多模型路由/scorecard/完整评估系统
+- [x] 7.5 更新 `tasks.md` 勾选已完成项，并准备人工 review 后再 archive OpenSpec change
