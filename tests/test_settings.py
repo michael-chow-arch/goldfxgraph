@@ -64,3 +64,30 @@ def test_environment_variables_override_env_file(tmp_path: Path, monkeypatch: Mo
 
     assert settings.log_level == "ERROR"
     assert str(settings.xauusd_csv_path) == "env/path.csv"
+
+
+def test_settings_support_legacy_env_aliases(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://legacy:pw@localhost:5432/legacy_db")
+    monkeypatch.setenv("OPENAI_API_KEY", "legacy-openai-key")
+    monkeypatch.setenv("GOLDFXGRAPH_OPENAI_MODEL", "gpt-4.1-mini")
+    monkeypatch.setenv("GOLDFXGRAPH_OPENAI_BASE_URL", "https://api.zhizengzeng.com/v1")
+
+    settings = GoldFXGraphSettings()
+
+    assert settings.database_url == "postgresql+asyncpg://legacy:pw@localhost:5432/legacy_db"
+    assert settings.openai_api_key is not None
+    assert settings.openai_api_key.get_secret_value() == "legacy-openai-key"
+    assert settings.openai_model == "gpt-4.1-mini"
+    assert settings.openai_base_url == "https://api.zhizengzeng.com/v1"
+
+
+def test_settings_prefers_goldfxgraph_database_url_over_legacy_alias(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://legacy:pw@localhost:5432/legacy_db")
+    monkeypatch.setenv(
+        "GOLDFXGRAPH_DATABASE_URL",
+        "postgresql+asyncpg://preferred:pw@localhost:5432/preferred_db",
+    )
+
+    settings = GoldFXGraphSettings()
+
+    assert settings.database_url == "postgresql+asyncpg://preferred:pw@localhost:5432/preferred_db"
