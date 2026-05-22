@@ -7,6 +7,7 @@ from typing import Any, cast
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
+from goldfxgraph.api import routes
 from goldfxgraph.api.app import create_app
 from goldfxgraph.packages.common.settings import GoldFXGraphSettings
 from goldfxgraph.persistence.repositories import ForecastRepository
@@ -75,6 +76,26 @@ def test_health_endpoint() -> None:
     assert response.json()["status"] == "ok"
 
 
+def test_unknown_api_route_returns_structured_404() -> None:
+    client = TestClient(create_app(testing=True))
+
+    response = client.get("/api/v1/unknown")
+
+    assert response.status_code == 404
+    assert response.json()["error"]["type"] == "not_found"
+    assert "detail" not in response.json()
+
+
+def test_path_validation_returns_structured_422() -> None:
+    client = TestClient(create_app(testing=True))
+
+    response = client.get("/api/v1/research-runs/not-an-int")
+
+    assert response.status_code == 422
+    assert response.json()["error"]["type"] == "validation_error"
+    assert "detail" not in response.json()
+
+
 def test_create_research_run_returns_structured_error_when_quote_provider_unconfigured(tmp_path: Path) -> None:
     csv_path = _write_csv(tmp_path)
     repository = InMemoryForecastRepository()
@@ -93,6 +114,53 @@ def test_create_research_run_returns_structured_error_when_quote_provider_unconf
     assert "agent-key" not in response.text
     assert "quote-secret" not in response.text
     assert repository.runs[1].status == "failed"
+
+
+def test_create_research_run_uses_langgraph_workflow(monkeypatch: Any) -> None:
+    repository = InMemoryForecastRepository()
+    invoked = False
+
+    class FakeCompiledGraph:
+        async def ainvoke(self, state: dict[str, Any]) -> dict[str, Any]:
+            nonlocal invoked
+            invoked = True
+            forecast = _forecast()
+            saved = await state["repository"].save_forecast(state["run_id"], forecast)
+            await state["repository"].mark_run_success(state["run_id"])
+            return {**state, "result": saved, "forecast": saved}
+
+    class FakeGraph:
+        def compile(self) -> FakeCompiledGraph:
+            return FakeCompiledGraph()
+
+    monkeypatch.setattr(routes, "build_forecast_graph", lambda: FakeGraph())
+    client = TestClient(create_app(testing=True, repository=cast(ForecastRepository, repository)))
+
+    response = client.post("/api/v1/research-runs")
+
+    assert response.status_code == 200
+    assert invoked is True
+    assert response.json()["status"] == "success"
+    assert response.json()["forecast"]["direction"] == "bullish"
+
+
+def test_configured_quote_provider_failure_records_sanitized_error(tmp_path: Path) -> None:
+    repository = InMemoryForecastRepository()
+    settings = GoldFXGraphSettings(
+        xauusd_csv_path=_write_csv(tmp_path),
+        current_quote_url="not-a-valid-url",
+        current_quote_api_key=SecretStr("quote-secret"),
+    )
+    client = TestClient(create_app(testing=True, settings=settings, repository=cast(ForecastRepository, repository)))
+
+    response = client.post("/api/v1/research-runs")
+
+    assert response.status_code == 503
+    assert response.json()["error"]["type"] == "quote_provider_error"
+    assert repository.runs[1].status == "failed"
+    assert repository.runs[1].error_message == "Current quote provider request failed"
+    assert "quote-secret" not in response.text
+    assert "quote-secret" not in str(repository.runs[1].error_message)
 
 
 def test_get_research_run_returns_structured_404_for_missing_run() -> None:
