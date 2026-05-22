@@ -34,12 +34,12 @@
 
 ## 5. FastAPI API
 
-- [ ] 5.1 实现 FastAPI app factory、健康检查或基础启动入口，并挂载 `/api/v1` router
-- [ ] 5.2 实现 `GET /api/v1/forecast/latest`
-- [ ] 5.3 实现 `POST /api/v1/research-runs`
-- [ ] 5.4 实现 `GET /api/v1/research-runs/{run_id}`
-- [ ] 5.5 实现 API 错误结构，覆盖市场数据错误、agent 调用错误、预测不存在和持久化错误
-- [ ] 5.6 增加 API 测试，验证结构化响应、empty/not found、错误响应和 secret 不泄露
+- [x] 5.1 实现 FastAPI app factory、健康检查或基础启动入口，并挂载 `/api/v1` router
+- [x] 5.2 实现 `GET /api/v1/forecast/latest`
+- [x] 5.3 实现 `POST /api/v1/research-runs`
+- [x] 5.4 实现 `GET /api/v1/research-runs/{run_id}`
+- [x] 5.5 实现 API 错误结构，覆盖市场数据错误、agent 调用错误、预测不存在和持久化错误
+- [x] 5.6 增加 API 测试，验证结构化响应、empty/not found、错误响应和 secret 不泄露
 
 ## 6. Vue 3 + Tailwind 前端
 
