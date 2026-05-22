@@ -17,19 +17,19 @@
 
 ## 3. 结构化模型与 LangGraph Workflow
 
-- [ ] 3.1 定义 Pydantic request/response models，覆盖 research run、daily bar、current quote、indicators、agent summaries、agent votes 和 forecast 输出
-- [ ] 3.2 实现 LangGraph workflow state 与图构建，包含 specs 要求的 router/tool/agent 节点名
-- [ ] 3.3 实现 `router_validate_request`、`tool_load_market_data`、`tool_fetch_current_gold_quote`、`tool_compute_indicators` 等确定性节点
-- [ ] 3.4 实现技术、宏观、新闻、风险和最终预测规划 agent 节点，使用可配置 agent API 地址与 API key，并约束输出为结构化结果
-- [ ] 3.5 在最终 forecast 中生成 `direction`、`entry_price`、`take_profit_price`、`stop_loss_price`、`holding_period`、`intraday_action`、`long_term_action`、`confidence_score`、`risk_notes` 和 disclaimer
-- [ ] 3.6 增加 workflow/schema 测试，验证节点存在、结构化输出字段、direction 枚举和 research-only 限制
+- [x] 3.1 定义 Pydantic request/response models，覆盖 research run、daily bar、current quote、indicators、agent summaries、agent votes 和 forecast 输出
+- [x] 3.2 实现 LangGraph workflow state 与图构建，包含 specs 要求的 router/tool/agent 节点名
+- [x] 3.3 实现 `router_validate_request`、`tool_load_market_data`、`tool_fetch_current_gold_quote`、`tool_compute_indicators` 等确定性节点
+- [x] 3.4 实现技术、宏观、新闻、风险和最终预测规划 agent 节点，使用可配置 agent API 地址与 API key，并约束输出为结构化结果
+- [x] 3.5 在最终 forecast 中生成 `direction`、`entry_price`、`take_profit_price`、`stop_loss_price`、`holding_period`、`intraday_action`、`long_term_action`、`confidence_score`、`risk_notes` 和 disclaimer
+- [x] 3.6 增加 workflow/schema 测试，验证节点存在、结构化输出字段、direction 枚举和 research-only 限制
 
 ## 4. PostgreSQL 持久化
 
 - [x] 4.1 实现 async SQLAlchemy engine/session 管理和显式 metadata 初始化边界
 - [x] 4.2 实现 `ResearchRunModel` 与 `ForecastModel`，使用 `Model` suffix 并保存 specs 要求字段
 - [x] 4.3 实现 repository/service 层，支持创建/更新 research run、保存 forecast、查询 latest forecast、按 run_id 查询 research run
-- [ ] 4.4 将 `tool_persist_research_run` 与 `tool_persist_forecast` 接入 workflow
+- [x] 4.4 将 `tool_persist_research_run` 与 `tool_persist_forecast` 接入 workflow
 - [x] 4.5 增加持久化测试，覆盖成功保存、失败状态记录、latest forecast 查询和 run_id 查询
 
 ## 5. FastAPI API
