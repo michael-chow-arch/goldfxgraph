@@ -76,8 +76,8 @@ class AgentVote(BaseModel):
 
 
 class ForecastResult(BaseModel):
-    id: str | None = None
-    run_id: str | None = None
+    id: int | None = None
+    run_id: int | None = None
     symbol: str = "XAUUSD"
     reference_time: datetime = Field(default_factory=lambda: datetime.now(UTC))
     data_timestamp: datetime
@@ -105,7 +105,7 @@ class ForecastResult(BaseModel):
 
 
 class ResearchRunResult(BaseModel):
-    id: str | None = None
+    id: int | None = None
     status: str
     started_at: datetime
     completed_at: datetime | None = None

@@ -26,11 +26,11 @@
 
 ## 4. PostgreSQL 持久化
 
-- [ ] 4.1 实现 async SQLAlchemy engine/session 管理和显式 metadata 初始化边界
-- [ ] 4.2 实现 `ResearchRunModel` 与 `ForecastModel`，使用 `Model` suffix 并保存 specs 要求字段
-- [ ] 4.3 实现 repository/service 层，支持创建/更新 research run、保存 forecast、查询 latest forecast、按 run_id 查询 research run
+- [x] 4.1 实现 async SQLAlchemy engine/session 管理和显式 metadata 初始化边界
+- [x] 4.2 实现 `ResearchRunModel` 与 `ForecastModel`，使用 `Model` suffix 并保存 specs 要求字段
+- [x] 4.3 实现 repository/service 层，支持创建/更新 research run、保存 forecast、查询 latest forecast、按 run_id 查询 research run
 - [ ] 4.4 将 `tool_persist_research_run` 与 `tool_persist_forecast` 接入 workflow
-- [ ] 4.5 增加持久化测试，覆盖成功保存、失败状态记录、latest forecast 查询和 run_id 查询
+- [x] 4.5 增加持久化测试，覆盖成功保存、失败状态记录、latest forecast 查询和 run_id 查询
 
 ## 5. FastAPI API
 
