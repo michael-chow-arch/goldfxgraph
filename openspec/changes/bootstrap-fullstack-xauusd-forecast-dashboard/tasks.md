@@ -8,12 +8,12 @@
 
 ## 2. 市场数据与技术指标
 
-- [ ] 2.1 实现 XAUUSD 日线 CSV loader，支持配置路径、大小写兼容字段解析、必要字段校验、日期排序和 latest completed daily bar 输出
-- [ ] 2.2 增加 CSV loader 单元测试，覆盖成功读取、缺字段、排序、可选字段保留和现有 `data/raw/xauusd_d.csv` 兼容场景
-- [ ] 2.3 实现 current/latest gold quote provider 边界，支持可配置 HTTP 数据源并记录 `current_price`、`data_source`、`data_timestamp`
-- [ ] 2.4 实现 provider 未配置或失败时的受控错误，禁止用 mock 数据伪装真实报价
-- [ ] 2.5 实现基础技术指标计算模块，至少覆盖一组 SMA/EMA/RSI/ATR/MACD 中的基础指标，并对数据不足返回结构化不可用原因
-- [ ] 2.6 增加指标计算单元测试，验证确定性结果和数据不足场景
+- [x] 2.1 实现 XAUUSD 日线 CSV loader，支持配置路径、大小写兼容字段解析、必要字段校验、日期排序和 latest completed daily bar 输出
+- [x] 2.2 增加 CSV loader 单元测试，覆盖成功读取、缺字段、排序、可选字段保留和现有 `data/raw/xauusd_d.csv` 兼容场景
+- [x] 2.3 实现 current/latest gold quote provider 边界，支持可配置 HTTP 数据源并记录 `current_price`、`data_source`、`data_timestamp`
+- [x] 2.4 实现 provider 未配置或失败时的受控错误，禁止用 mock 数据伪装真实报价
+- [x] 2.5 实现基础技术指标计算模块，至少覆盖一组 SMA/EMA/RSI/ATR/MACD 中的基础指标，并对数据不足返回结构化不可用原因
+- [x] 2.6 增加指标计算单元测试，验证确定性结果和数据不足场景
 
 ## 3. 结构化模型与 LangGraph Workflow
 
