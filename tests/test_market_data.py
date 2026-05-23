@@ -223,3 +223,35 @@ def test_quote_provider_uses_default_candidate_urls_with_dedupe() -> None:
         "https://api.gold-api.com/price/XAU",
     ]
     assert quote.current_price == 2049.75
+
+
+def test_quote_provider_does_not_send_authorization_to_default_candidates_without_explicit_url() -> None:
+    requested_urls: list[str] = []
+    captured_authorization_headers: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        captured_authorization_headers.append(request.headers.get("authorization"))
+        if str(request.url) == "https://api.gold-api.com/price/XAU":
+            return httpx.Response(503, request=request)
+        return httpx.Response(
+            200,
+            json={"price": 2051.0, "timestamp": "2024-01-04T00:00:00Z"},
+            request=request,
+        )
+
+    provider = CurrentQuoteProvider(
+        url=None,
+        api_key="token-that-must-not-leak",
+        candidate_urls=None,
+        transport=httpx.MockTransport(handler),
+    )
+
+    quote = provider.fetch()
+
+    assert requested_urls == [
+        "https://api.gold-api.com/price/XAU",
+        "https://api.gold-api.com/price/XAU/USD",
+    ]
+    assert captured_authorization_headers == [None, None]
+    assert quote.current_price == 2051.0
