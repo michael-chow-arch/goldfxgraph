@@ -189,7 +189,7 @@ def agent_technical_analysis(state: WorkflowState) -> WorkflowState:
     latest_bar = _required(state, "latest_bar")
     quote = _required(state, "quote")
     indicators = _required(state, "indicators")
-    remote = _remote_agent_response(state, "technical")
+    remote, diagnostic = _remote_agent_response(state, "technical")
     direction = remote.direction if remote else _direction_from_inputs(quote.current_price, latest_bar, indicators)
     vote = AgentVote(
         agent="technical",
@@ -202,12 +202,13 @@ def agent_technical_analysis(state: WorkflowState) -> WorkflowState:
     return {
         **state,
         "technical_summary": vote.rationale,
+        "risk_notes": _append_note(state.get("risk_notes"), diagnostic),
         "agent_votes": [*_existing_votes_without(state, "technical"), vote],
     }
 
 
 def agent_macro_analysis(state: WorkflowState) -> WorkflowState:
-    remote = _remote_agent_response(state, "macro")
+    remote, diagnostic = _remote_agent_response(state, "macro")
     summary = (
         remote.summary
         if remote
@@ -219,11 +220,16 @@ def agent_macro_analysis(state: WorkflowState) -> WorkflowState:
         confidence=remote.confidence if remote else 0.35,
         rationale=summary,
     )
-    return {**state, "macro_summary": summary, "agent_votes": [*_existing_votes_without(state, "macro"), vote]}
+    return {
+        **state,
+        "macro_summary": summary,
+        "risk_notes": _append_note(state.get("risk_notes"), diagnostic),
+        "agent_votes": [*_existing_votes_without(state, "macro"), vote],
+    }
 
 
 def agent_news_analysis(state: WorkflowState) -> WorkflowState:
-    remote = _remote_agent_response(state, "news")
+    remote, diagnostic = _remote_agent_response(state, "news")
     summary = remote.summary if remote else "新闻 agent 暂未调用外部实时新闻源，当前不使用未验证新闻作为方向依据。"
     vote = AgentVote(
         agent="news",
@@ -231,7 +237,12 @@ def agent_news_analysis(state: WorkflowState) -> WorkflowState:
         confidence=remote.confidence if remote else 0.35,
         rationale=summary,
     )
-    return {**state, "news_summary": summary, "agent_votes": [*_existing_votes_without(state, "news"), vote]}
+    return {
+        **state,
+        "news_summary": summary,
+        "risk_notes": _append_note(state.get("risk_notes"), diagnostic),
+        "agent_votes": [*_existing_votes_without(state, "news"), vote],
+    }
 
 
 def agent_risk_analysis(state: WorkflowState) -> WorkflowState:
@@ -239,8 +250,12 @@ def agent_risk_analysis(state: WorkflowState) -> WorkflowState:
     quote = _required(state, "quote")
     indicators = _required(state, "indicators")
     atr = _usable_atr(indicators, latest_bar, quote.current_price)
-    remote = _remote_agent_response(state, "risk")
-    notes = remote.risk_notes if remote and remote.risk_notes else _risk_notes(latest_bar, indicators, atr)
+    remote, diagnostic = _remote_agent_response(state, "risk")
+    notes = _merge_notes(
+        state.get("risk_notes"),
+        remote.risk_notes if remote and remote.risk_notes else _risk_notes(latest_bar, indicators, atr),
+    )
+    notes = _append_note(notes, diagnostic)
     summary = (
         remote.summary if remote else "风险 agent 基于 ATR、日线区间与指标缺失情况生成结构化提示，不触发任何交易执行。"
     )
@@ -297,7 +312,7 @@ def agent_forecast_planning(state: WorkflowState) -> WorkflowState:
     if "risk_summary" in state:
         forecast.risk_summary = state["risk_summary"]
     if "risk_notes" in state:
-        forecast.risk_notes = state["risk_notes"]
+        forecast.risk_notes = _merge_notes(forecast.risk_notes, state["risk_notes"])
 
     return {**state, "forecast": forecast}
 
@@ -513,10 +528,10 @@ def _existing_votes_without(state: WorkflowState, agent_name: str) -> list[Agent
     return [vote for vote in state.get("agent_votes", []) if vote.agent != agent_name]
 
 
-def _remote_agent_response(state: WorkflowState, agent_name: str) -> AgentApiResponse | None:
+def _remote_agent_response(state: WorkflowState, agent_name: str) -> tuple[AgentApiResponse | None, str | None]:
     settings = state.get("settings") or get_settings()
     if not settings.openai_base_url or not settings.openai_model or not settings.openai_api_key:
-        return None
+        return None, None
 
     # 只发送可验证的市场/指标上下文，不把 secret 或 settings 放进 payload。
     payload = _agent_payload(state, agent_name)
@@ -529,9 +544,23 @@ def _remote_agent_response(state: WorkflowState, agent_name: str) -> AgentApiRes
             transport=transport,
         ).invoke_agent(agent_name, payload)
     except OpenAIClientError:
-        return None
+        return None, f"OpenAI-compatible {agent_name} agent 调用失败，已回退到 deterministic workflow 输出。"
 
-    return AgentApiResponse.model_validate(result.model_dump())
+    return AgentApiResponse.model_validate(result.model_dump()), None
+
+
+def _merge_notes(base_notes: list[str] | None, extra_notes: list[str] | None) -> list[str]:
+    merged: list[str] = []
+    for note in [*(base_notes or []), *(extra_notes or [])]:
+        if note not in merged:
+            merged.append(note)
+    return merged
+
+
+def _append_note(notes: list[str] | None, note: str | None) -> list[str]:
+    if note is None:
+        return list(notes or [])
+    return _merge_notes(notes, [note])
 
 
 def _agent_payload(state: WorkflowState, agent_name: str) -> dict[str, object]:

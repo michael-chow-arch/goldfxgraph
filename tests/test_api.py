@@ -10,6 +10,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from goldfxgraph.api import routes
 from goldfxgraph.api.app import create_app
+from goldfxgraph.llm.openai_client import OpenAIAgentClient, OpenAIClientError
 from goldfxgraph.market_data.current_quote import QuoteProviderError
 from goldfxgraph.packages.common.settings import GoldFXGraphSettings
 from goldfxgraph.persistence.repositories import ForecastRepository
@@ -147,6 +148,43 @@ def test_create_research_run_succeeds_without_manual_quote_url_when_discovery_su
     assert "agent-key" not in response.text
     assert "quote-secret" not in response.text
     assert repository.runs[1].status == "success"
+
+
+def test_create_research_run_surfaces_remote_agent_fallback_in_forecast(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    csv_path = _write_csv(tmp_path)
+    repository = InMemoryForecastRepository()
+    monkeypatch.setattr(
+        nodes.CurrentQuoteProvider,
+        "fetch",
+        lambda self: CurrentQuote(
+            symbol="XAUUSD",
+            current_price=2058.0,
+            data_source="discovered-provider",
+            data_timestamp=datetime.now(UTC),
+        ),
+    )
+    monkeypatch.setattr(
+        OpenAIAgentClient,
+        "invoke_agent",
+        lambda self, agent_name, payload: (_ for _ in ()).throw(OpenAIClientError(f"{agent_name} failed")),
+    )
+    settings = GoldFXGraphSettings(
+        xauusd_csv_path=csv_path,
+        openai_base_url="https://agent.example.test/v1",
+        openai_model="gpt-4.1-mini",
+        openai_api_key=SecretStr("agent-key"),
+    )
+    client = TestClient(create_app(testing=True, settings=settings, repository=cast(ForecastRepository, repository)))
+
+    response = client.post("/api/v1/research-runs")
+
+    assert response.status_code == 200
+    notes = response.json()["forecast"]["risk_notes"]
+    assert any("OpenAI-compatible technical agent 调用失败" in note for note in notes)
+    assert any("OpenAI-compatible macro agent 调用失败" in note for note in notes)
 
 
 def test_create_research_run_uses_cached_langgraph_workflow(monkeypatch: Any) -> None:
