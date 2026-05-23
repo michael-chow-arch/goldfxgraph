@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from json import JSONDecodeError
 from pathlib import Path
 from typing import Any, Protocol, TypedDict
 
 import httpx
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 
 from goldfxgraph.indicators.technical import compute_technical_indicators
+from goldfxgraph.llm.openai_client import OpenAIAgentClient, OpenAIClientError
 from goldfxgraph.market_data.csv_loader import load_xauusd_daily_csv
 from goldfxgraph.market_data.current_quote import CurrentQuoteProvider
 from goldfxgraph.packages.common.settings import GoldFXGraphSettings, get_settings
@@ -160,10 +160,12 @@ def tool_fetch_current_gold_quote(state: WorkflowState) -> WorkflowState:
     provider = state.get("quote_provider")
     if provider is None:
         settings = state.get("settings") or get_settings()
-        provider = CurrentQuoteProvider(
-            url=settings.current_quote_url,
-            api_key=settings.current_quote_api_key.get_secret_value() if settings.current_quote_api_key else None,
-        )
+        provider_kwargs: dict[str, str] = {}
+        if settings.current_quote_url:
+            provider_kwargs["url"] = settings.current_quote_url
+        if settings.current_quote_api_key:
+            provider_kwargs["api_key"] = settings.current_quote_api_key.get_secret_value()
+        provider = CurrentQuoteProvider(**provider_kwargs)
 
     quote = provider.fetch()
     return {**state, "quote": quote}
@@ -513,41 +515,23 @@ def _existing_votes_without(state: WorkflowState, agent_name: str) -> list[Agent
 
 def _remote_agent_response(state: WorkflowState, agent_name: str) -> AgentApiResponse | None:
     settings = state.get("settings") or get_settings()
-    if not settings.agent_api_base_url:
+    if not settings.openai_base_url or not settings.openai_model or not settings.openai_api_key:
         return None
-
-    headers: dict[str, str] = {}
-    if settings.agent_api_key:
-        headers["Authorization"] = f"Bearer {settings.agent_api_key.get_secret_value()}"
 
     # 只发送可验证的市场/指标上下文，不把 secret 或 settings 放进 payload。
     payload = _agent_payload(state, agent_name)
     transport = state.get("agent_http_transport")
-    client_kwargs: dict[str, Any] = {"timeout": 10}
-    if transport is not None:
-        client_kwargs["transport"] = transport
-
     try:
-        with httpx.Client(**client_kwargs) as client:
-            response = client.post(_agent_url(settings.agent_api_base_url, agent_name), json=payload, headers=headers)
-            response.raise_for_status()
-            data = response.json()
-    except httpx.HTTPError as exc:
-        raise ValueError(f"agent API request failed for {agent_name}") from exc
-    except JSONDecodeError as exc:
-        raise ValueError(f"agent API returned invalid JSON payload for {agent_name}") from exc
+        result = OpenAIAgentClient(
+            base_url=settings.openai_base_url,
+            model=settings.openai_model,
+            api_key=settings.openai_api_key.get_secret_value(),
+            transport=transport,
+        ).invoke_agent(agent_name, payload)
+    except OpenAIClientError:
+        return None
 
-    if not isinstance(data, dict):
-        raise ValueError(f"agent API returned invalid structured result for {agent_name}")
-
-    try:
-        return AgentApiResponse.model_validate(data)
-    except ValidationError as exc:
-        raise ValueError(f"agent API returned invalid structured result for {agent_name}") from exc
-
-
-def _agent_url(base_url: str, agent_name: str) -> str:
-    return f"{base_url.rstrip('/')}/agents/{agent_name}"
+    return AgentApiResponse.model_validate(result.model_dump())
 
 
 def _agent_payload(state: WorkflowState, agent_name: str) -> dict[str, object]:

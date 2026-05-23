@@ -76,22 +76,31 @@ def test_agent_node_uses_configured_agent_api_without_leaking_key() -> None:
         return httpx.Response(
             200,
             json={
-                "summary": "远程宏观摘要：美元与实际利率压力偏空。",
-                "direction": "bearish",
-                "confidence": 0.62,
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '{"summary":"远程宏观摘要：美元与实际利率压力偏空。",'
+                                '"direction":"bearish","confidence":0.62}'
+                            )
+                        }
+                    }
+                ]
             },
+            request=request,
         )
 
     settings = GoldFXGraphSettings(
-        agent_api_base_url="https://agent.example.test/v1",
-        agent_api_key=SecretStr("secret-token"),
+        openai_base_url="https://agent.example.test/v1",
+        openai_model="gpt-4.1-mini",
+        openai_api_key=SecretStr("secret-token"),
     )
     state = WorkflowState(settings=settings, agent_http_transport=httpx.MockTransport(handler))
 
     state = agent_macro_analysis(state)
 
     assert len(requests) == 1
-    assert str(requests[0].url) == "https://agent.example.test/v1/agents/macro"
+    assert str(requests[0].url) == "https://agent.example.test/v1/chat/completions"
     agent_votes = state.get("agent_votes")
     assert state.get("macro_summary") == "远程宏观摘要：美元与实际利率压力偏空。"
     assert agent_votes is not None
@@ -110,7 +119,7 @@ def test_agent_node_uses_deterministic_fallback_without_agent_api() -> None:
         raise AssertionError("agent API should not be called without configured base URL")
 
     state = WorkflowState(
-        settings=GoldFXGraphSettings(agent_api_base_url=None),
+        settings=GoldFXGraphSettings(openai_base_url=None, openai_model="gpt-4.1-mini"),
         latest_bar=bars[-1],
         quote=_quote(),
         indicators=compute_technical_indicators(bars),
@@ -126,6 +135,36 @@ def test_agent_node_uses_deterministic_fallback_without_agent_api() -> None:
     assert technical_summary.startswith("当前报价")
     assert agent_votes is not None
     assert agent_votes[0].agent == "technical"
+
+
+def test_agent_node_uses_deterministic_fallback_without_complete_openai_config() -> None:
+    bars = _bars()
+    called = False
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal called
+        called = True
+        raise AssertionError("OpenAI-compatible client should not be called with incomplete config")
+
+    state = WorkflowState(
+        settings=GoldFXGraphSettings(
+            openai_base_url="https://agent.example.test/v1",
+            openai_model=None,
+            openai_api_key=SecretStr("secret-token"),
+        ),
+        latest_bar=bars[-1],
+        quote=_quote(),
+        indicators=compute_technical_indicators(bars),
+        agent_http_transport=httpx.MockTransport(handler),
+    )
+
+    state = agent_technical_analysis(state)
+
+    assert called is False
+    assert state.get("technical_summary", "").startswith("当前报价")
+    agent_votes = state.get("agent_votes")
+    assert agent_votes is not None
+    assert agent_votes[0].direction == ForecastDirection.bullish
 
 
 def test_forecast_planning_aligns_direction_and_levels_with_agent_votes() -> None:
@@ -167,17 +206,31 @@ def test_forecast_planning_aligns_direction_and_levels_with_agent_votes() -> Non
     assert "防守或空头" in forecast.long_term_action
 
 
-def test_agent_api_invalid_json_raises_controlled_error() -> None:
+def test_agent_node_falls_back_deterministically_when_openai_response_is_invalid() -> None:
+    bars = _bars()
+
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=b"not-json")
 
     state = WorkflowState(
-        settings=GoldFXGraphSettings(agent_api_base_url="https://agent.example.test/v1"),
+        settings=GoldFXGraphSettings(
+            openai_base_url="https://agent.example.test/v1",
+            openai_model="gpt-4.1-mini",
+            openai_api_key=SecretStr("secret-token"),
+        ),
+        latest_bar=bars[-1],
+        quote=_quote(),
+        indicators=compute_technical_indicators(bars),
         agent_http_transport=httpx.MockTransport(handler),
     )
 
-    with pytest.raises(ValueError, match="agent API returned invalid JSON payload for macro"):
-        agent_macro_analysis(state)
+    state = agent_technical_analysis(state)
+
+    assert state.get("technical_summary", "").startswith("当前报价")
+    agent_votes = state.get("agent_votes")
+    assert agent_votes is not None
+    assert agent_votes[0].agent == "technical"
+    assert agent_votes[0].direction == ForecastDirection.bullish
 
 
 @pytest.mark.asyncio
