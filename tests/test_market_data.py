@@ -61,9 +61,11 @@ def test_daily_bar_rejects_non_finite_or_negative_values() -> None:
 
 def test_quote_provider_tries_multiple_sources_until_success() -> None:
     requested_urls: list[str] = []
+    headers_by_host: dict[str, str | None] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         requested_urls.append(str(request.url))
+        headers_by_host[request.url.host or ""] = request.headers.get("authorization")
         if request.url.host == "first.example.test":
             return httpx.Response(503, request=request)
         if request.url.host == "second.example.test":
@@ -92,6 +94,31 @@ def test_quote_provider_tries_multiple_sources_until_success() -> None:
     ]
     assert quote.current_price == 2058.5
     assert quote.data_source == "second.example.test"
+    assert headers_by_host["first.example.test"] == "Bearer token"
+    assert headers_by_host["second.example.test"] is None
+
+
+def test_quote_provider_uses_actual_successful_fallback_host_when_source_name_is_set() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "primary.example.test":
+            return httpx.Response(503, request=request)
+        return httpx.Response(
+            200,
+            json={"current_price": 2061.25, "timestamp": "2024-01-02T00:00:00Z"},
+            request=request,
+        )
+
+    provider = CurrentQuoteProvider(
+        url="https://primary.example.test/latest",
+        api_key=None,
+        source_name="configured-primary",
+        candidate_urls=["https://fallback.example.test/latest"],
+        transport=httpx.MockTransport(handler),
+    )
+
+    quote = provider.fetch()
+
+    assert quote.data_source == "fallback.example.test"
 
 
 def test_quote_provider_returns_controlled_error_when_all_sources_fail() -> None:
@@ -110,13 +137,16 @@ def test_quote_provider_returns_controlled_error_when_all_sources_fail() -> None
         transport=httpx.MockTransport(handler),
     )
 
-    with pytest.raises(QuoteProviderError, match="Current quote discovery failed"):
+    with pytest.raises(QuoteProviderError, match="Current quote discovery failed") as exc_info:
         provider.fetch()
 
     assert requested_urls == [
         "https://first.example.test/latest?apikey=secret",
         "https://second.example.test/quote?token=secret-backup",
     ]
+    assert isinstance(exc_info.value.__cause__, QuoteProviderError)
+    assert "invalid price" in str(exc_info.value.__cause__)
+    assert "secret" not in str(exc_info.value)
 
 
 def test_quote_provider_rejects_non_finite_price() -> None:
@@ -162,3 +192,34 @@ def test_quote_provider_sanitizes_url_fallback_source() -> None:
     assert quote.data_source == "quote.example.test"
     assert "secret" not in quote.data_source
     assert captured_headers["authorization"] == "Bearer token"
+
+
+def test_quote_provider_uses_default_candidate_urls_with_dedupe() -> None:
+    requested_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if request.url.host == "primary.example.test":
+            return httpx.Response(503, request=request)
+        if str(request.url) == "https://api.gold-api.com/price/XAU":
+            return httpx.Response(
+                200,
+                json={"price": 2049.75, "timestamp": "2024-01-03T00:00:00Z"},
+                request=request,
+            )
+        return httpx.Response(500, request=request)
+
+    provider = CurrentQuoteProvider(
+        url="https://primary.example.test/latest",
+        api_key=None,
+        candidate_urls=None,
+        transport=httpx.MockTransport(handler),
+    )
+
+    quote = provider.fetch()
+
+    assert requested_urls == [
+        "https://primary.example.test/latest",
+        "https://api.gold-api.com/price/XAU",
+    ]
+    assert quote.current_price == 2049.75
