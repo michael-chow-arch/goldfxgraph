@@ -37,25 +37,46 @@ class CurrentQuoteProvider:
         self.transport = transport
 
     def fetch(self) -> CurrentQuote:
-        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else None
         urls = _build_candidate_urls(self.url, self.candidate_urls)
+        last_error: QuoteProviderError | None = None
 
         with httpx.Client(transport=self.transport, timeout=10) as client:
-            for candidate_url in urls:
+            for index, candidate_url in enumerate(urls):
                 try:
-                    response = client.get(candidate_url, headers=headers)
-                    response.raise_for_status()
-                    payload = response.json()
-                    if not isinstance(payload, dict):
-                        raise QuoteProviderError("Current quote provider returned invalid JSON payload")
-                    return _quote_from_payload(
-                        payload,
-                        fallback_source=self.source_name or _safe_source_from_url(candidate_url),
-                    )
-                except (httpx.HTTPError, ValueError, QuoteProviderError):
+                    return self._fetch_from_candidate(client, candidate_url, is_primary=index == 0)
+                except QuoteProviderError as exc:
+                    last_error = exc
                     continue
 
+        if last_error is not None:
+            raise QuoteProviderError("Current quote discovery failed") from last_error
         raise QuoteProviderError("Current quote discovery failed")
+
+    def _fetch_from_candidate(self, client: httpx.Client, candidate_url: str, *, is_primary: bool) -> CurrentQuote:
+        headers = _headers_for_candidate(is_primary=is_primary, api_key=self.api_key)
+
+        try:
+            response = client.get(candidate_url, headers=headers)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise QuoteProviderError("Current quote provider request failed") from exc
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise QuoteProviderError("Current quote provider returned invalid JSON payload") from exc
+
+        if not isinstance(payload, dict):
+            raise QuoteProviderError("Current quote provider returned invalid JSON payload")
+
+        return _quote_from_payload(
+            payload,
+            fallback_source=_fallback_source_for_candidate(
+                candidate_url=candidate_url,
+                source_name=self.source_name,
+                is_primary=is_primary,
+            ),
+        )
 
 
 def _quote_from_payload(payload: dict[str, Any], fallback_source: str) -> CurrentQuote:
@@ -141,3 +162,15 @@ def _sanitize_source(source: str) -> str:
     if parsed.netloc:
         return parsed.netloc
     return stripped
+
+
+def _headers_for_candidate(*, is_primary: bool, api_key: str | None) -> dict[str, str] | None:
+    if not is_primary or not api_key:
+        return None
+    return {"Authorization": f"Bearer {api_key}"}
+
+
+def _fallback_source_for_candidate(candidate_url: str, source_name: str | None, *, is_primary: bool) -> str:
+    if is_primary and source_name:
+        return source_name
+    return _safe_source_from_url(candidate_url)
