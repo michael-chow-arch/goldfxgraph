@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, date, datetime
 
 import httpx
@@ -100,7 +101,19 @@ def test_agent_node_uses_configured_agent_api_without_leaking_key() -> None:
     state = agent_macro_analysis(state)
 
     assert len(requests) == 1
-    assert str(requests[0].url) == "https://agent.example.test/v1/chat/completions"
+    request = requests[0]
+    assert str(request.url) == "https://agent.example.test/v1/chat/completions"
+    body = json.loads(request.content.decode())
+    assert body["model"] == "gpt-4.1-mini"
+    assert body["response_format"] == {"type": "json_object"}
+    assert len(body["messages"]) == 2
+    assert body["messages"][0]["role"] == "system"
+    assert "macro" in body["messages"][0]["content"]
+    assert body["messages"][1]["role"] == "user"
+    user_message = json.loads(body["messages"][1]["content"])
+    assert user_message["agent_name"] == "macro"
+    assert user_message["payload"]["agent"] == "macro"
+    assert user_message["payload"]["symbol"] == "XAUUSD"
     agent_votes = state.get("agent_votes")
     assert state.get("macro_summary") == "远程宏观摘要：美元与实际利率压力偏空。"
     assert agent_votes is not None
@@ -231,6 +244,41 @@ def test_agent_node_falls_back_deterministically_when_openai_response_is_invalid
     assert agent_votes is not None
     assert agent_votes[0].agent == "technical"
     assert agent_votes[0].direction == ForecastDirection.bullish
+    assert state.get("risk_notes") == [
+        "OpenAI-compatible technical agent 调用失败，已回退到 deterministic workflow 输出。"
+    ]
+
+
+def test_forecast_planning_carries_remote_agent_fallback_diagnostics_into_risk_notes() -> None:
+    bars = _bars()
+    indicators = compute_technical_indicators(bars)
+    quote = _quote()
+    state = WorkflowState(
+        latest_bar=bars[-1],
+        quote=quote,
+        indicators=indicators,
+        technical_summary="当前报价 2040.00，最新完成日线收盘 2032.00，结构化方向为看多。",
+        agent_votes=[
+            AgentVote(
+                agent="technical",
+                direction=ForecastDirection.bullish,
+                confidence=0.73,
+                rationale="技术面回退输出",
+            ),
+            AgentVote(agent="macro", direction=ForecastDirection.neutral, confidence=0.35, rationale="宏观中性"),
+        ],
+        risk_notes=[
+            "已有风险提示",
+            "OpenAI-compatible technical agent 调用失败，已回退到 deterministic workflow 输出。",
+        ],
+    )
+
+    planned = agent_forecast_planning(state)
+    forecast = planned.get("forecast")
+
+    assert forecast is not None
+    assert "已有风险提示" in forecast.risk_notes
+    assert "OpenAI-compatible technical agent 调用失败，已回退到 deterministic workflow 输出。" in forecast.risk_notes
 
 
 @pytest.mark.asyncio
