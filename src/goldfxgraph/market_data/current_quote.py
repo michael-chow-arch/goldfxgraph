@@ -15,28 +15,47 @@ class QuoteProviderError(RuntimeError):
     """当前报价 provider 未配置或返回无效数据。"""
 
 
+DEFAULT_CANDIDATE_URLS: tuple[str, ...] = (
+    "https://api.gold-api.com/price/XAU",
+    "https://api.gold-api.com/price/XAU/USD",
+)
+
+
 class CurrentQuoteProvider:
-    def __init__(self, url: str | None, api_key: str | None, source_name: str | None = None) -> None:
+    def __init__(
+        self,
+        url: str | None = None,
+        api_key: str | None = None,
+        source_name: str | None = None,
+        candidate_urls: list[str] | None = None,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
         self.url = url
         self.api_key = api_key
         self.source_name = source_name
+        self.candidate_urls = candidate_urls
+        self.transport = transport
 
     def fetch(self) -> CurrentQuote:
-        if not self.url:
-            raise QuoteProviderError("Current quote provider is not configured")
-
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else None
-        try:
-            response = httpx.get(self.url, headers=headers, timeout=10)
-            response.raise_for_status()
-            payload = response.json()
-        except Exception as exc:
-            raise QuoteProviderError("Current quote provider request failed") from exc
+        urls = _build_candidate_urls(self.url, self.candidate_urls)
 
-        if not isinstance(payload, dict):
-            raise QuoteProviderError("Current quote provider returned invalid JSON payload")
+        with httpx.Client(transport=self.transport, timeout=10) as client:
+            for candidate_url in urls:
+                try:
+                    response = client.get(candidate_url, headers=headers)
+                    response.raise_for_status()
+                    payload = response.json()
+                    if not isinstance(payload, dict):
+                        raise QuoteProviderError("Current quote provider returned invalid JSON payload")
+                    return _quote_from_payload(
+                        payload,
+                        fallback_source=self.source_name or _safe_source_from_url(candidate_url),
+                    )
+                except (httpx.HTTPError, ValueError, QuoteProviderError):
+                    continue
 
-        return _quote_from_payload(payload, fallback_source=self.source_name or _safe_source_from_url(self.url))
+        raise QuoteProviderError("Current quote discovery failed")
 
 
 def _quote_from_payload(payload: dict[str, Any], fallback_source: str) -> CurrentQuote:
@@ -52,7 +71,7 @@ def _quote_from_payload(payload: dict[str, Any], fallback_source: str) -> Curren
         raise QuoteProviderError("Current quote provider payload contains invalid price")
 
     timestamp = _parse_timestamp(payload.get("timestamp") or payload.get("data_timestamp"))
-    data_source = str(payload.get("source") or fallback_source)
+    data_source = _sanitize_source(str(payload.get("source") or fallback_source))
     symbol = str(payload.get("symbol") or "XAUUSD")
 
     try:
@@ -99,3 +118,26 @@ def _safe_source_from_url(url: str) -> str:
     if parsed.netloc:
         return parsed.netloc
     return "configured-current-quote-provider"
+
+
+def _build_candidate_urls(url: str | None, candidate_urls: list[str] | None) -> list[str]:
+    urls: list[str] = []
+    fallback_candidates = list(DEFAULT_CANDIDATE_URLS) if candidate_urls is None else candidate_urls
+
+    for candidate in [url, *fallback_candidates]:
+        if not candidate or candidate in urls:
+            continue
+        urls.append(candidate)
+
+    return urls
+
+
+def _sanitize_source(source: str) -> str:
+    stripped = source.strip()
+    if not stripped:
+        return stripped
+
+    parsed = urlparse(stripped)
+    if parsed.netloc:
+        return parsed.netloc
+    return stripped
