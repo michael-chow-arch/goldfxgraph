@@ -80,6 +80,21 @@ def test_health_endpoint() -> None:
     assert response.json()["status"] == "ok"
 
 
+def test_api_allows_local_frontend_origin_via_cors() -> None:
+    client = TestClient(create_app(testing=True))
+
+    response = client.options(
+        "/api/v1/forecast/latest",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
 def test_unknown_api_route_returns_structured_404() -> None:
     client = TestClient(create_app(testing=True))
 

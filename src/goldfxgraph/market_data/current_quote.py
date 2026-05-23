@@ -95,9 +95,9 @@ def _quote_from_payload(payload: dict[str, Any], fallback_source: str) -> Curren
     if not isfinite(current_price) or current_price <= 0:
         raise QuoteProviderError("Current quote provider payload contains invalid price")
 
-    timestamp = _parse_timestamp(payload.get("timestamp") or payload.get("data_timestamp"))
+    timestamp = _parse_timestamp(payload.get("timestamp") or payload.get("data_timestamp") or payload.get("updatedAt"))
     data_source = _sanitize_source(str(payload.get("source") or fallback_source))
-    symbol = str(payload.get("symbol") or "XAUUSD")
+    symbol = _normalize_symbol(payload)
 
     try:
         return CurrentQuote(
@@ -108,6 +108,14 @@ def _quote_from_payload(payload: dict[str, Any], fallback_source: str) -> Curren
         )
     except ValidationError as exc:
         raise QuoteProviderError(f"Current quote provider payload is invalid: {exc.errors()[0]['msg']}") from exc
+
+
+def _normalize_symbol(payload: dict[str, Any]) -> str:
+    symbol = str(payload.get("symbol") or "XAUUSD").strip().upper()
+    currency = str(payload.get("currency") or "").strip().upper()
+    if symbol == "XAU" and currency == "USD":
+        return "XAUUSD"
+    return symbol or "XAUUSD"
 
 
 def _first_present(payload: dict[str, Any], keys: list[str]) -> Any:
