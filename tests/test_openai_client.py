@@ -100,3 +100,18 @@ def test_openai_client_rejects_invalid_structured_payload() -> None:
 
     with pytest.raises(OpenAIClientError, match="returned invalid structured result"):
         client.invoke_agent("news", {"symbol": "XAUUSD"})
+
+
+def test_openai_client_wraps_http_errors() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json={"error": "service unavailable"}, request=request)
+
+    client = OpenAIAgentClient(
+        base_url="https://api.zhizengzeng.com/v1",
+        model="gpt-4.1-mini",
+        api_key="super-secret-key",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(OpenAIClientError, match="request failed for technical"):
+        client.invoke_agent("technical", {"symbol": "XAUUSD"})
