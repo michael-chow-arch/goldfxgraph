@@ -255,3 +255,29 @@ def test_quote_provider_does_not_send_authorization_to_default_candidates_withou
     ]
     assert captured_authorization_headers == [None, None]
     assert quote.current_price == 2051.0
+
+
+def test_quote_provider_accepts_updated_at_and_normalizes_xau_usd_symbol() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "price": 4510.5,
+                "symbol": "XAU",
+                "currency": "USD",
+                "updatedAt": "2026-05-23T02:56:05Z",
+            },
+            request=request,
+        )
+
+    provider = CurrentQuoteProvider(
+        url="https://api.gold-api.com/price/XAU",
+        candidate_urls=[],
+        transport=httpx.MockTransport(handler),
+    )
+
+    quote = provider.fetch()
+
+    assert quote.symbol == "XAUUSD"
+    assert quote.current_price == 4510.5
+    assert quote.data_timestamp.isoformat() == "2026-05-23T02:56:05+00:00"

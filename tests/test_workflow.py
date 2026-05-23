@@ -109,6 +109,7 @@ def test_agent_node_uses_configured_agent_api_without_leaking_key() -> None:
     assert len(body["messages"]) == 2
     assert body["messages"][0]["role"] == "system"
     assert "macro" in body["messages"][0]["content"]
+    assert "简体中文" in body["messages"][0]["content"]
     assert body["messages"][1]["role"] == "user"
     user_message = json.loads(body["messages"][1]["content"])
     assert user_message["agent_name"] == "macro"

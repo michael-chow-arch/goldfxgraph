@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from goldfxgraph.api.errors import register_error_handlers
 from goldfxgraph.api.routes import router
@@ -13,6 +14,14 @@ from goldfxgraph.packages.common.settings import GoldFXGraphSettings, get_settin
 from goldfxgraph.persistence.database import create_session_factory, init_models
 from goldfxgraph.persistence.repositories import ForecastRepository
 from goldfxgraph.schemas.forecast import ForecastResult, ResearchRunResult
+
+
+LOCAL_FRONTEND_ORIGINS = (
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
+)
 
 
 def create_app(
@@ -51,6 +60,13 @@ def create_app(
         app.state.repository = repository
     elif testing:
         app.state.repository = InMemoryForecastRepository()
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(LOCAL_FRONTEND_ORIGINS),
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["*"],
+    )
     app.include_router(router, prefix="/api/v1")
     register_error_handlers(app)
 

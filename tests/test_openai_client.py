@@ -57,6 +57,7 @@ def test_openai_client_sends_bearer_header_and_parses_structured_result() -> Non
     body = json.loads(payload)
     assert "super-secret-key" not in payload
     assert body["model"] == "gpt-4.1-mini"
+    assert "简体中文" in body["messages"][0]["content"]
     assert "technical" in body["messages"][1]["content"]
 
 
@@ -115,3 +116,66 @@ def test_openai_client_wraps_http_errors() -> None:
 
     with pytest.raises(OpenAIClientError, match="request failed for technical"):
         client.invoke_agent("technical", {"symbol": "XAUUSD"})
+
+
+def test_openai_client_normalizes_string_risk_notes_to_list() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '{"summary":"技术面中性。","direction":"neutral",'
+                                '"confidence":0.51,"risk_notes":"等待宏观数据确认。"}'
+                            )
+                        }
+                    }
+                ]
+            },
+            request=request,
+        )
+
+    client = OpenAIAgentClient(
+        base_url="https://api.zhizengzeng.com/v1",
+        model="gpt-4.1-mini",
+        api_key="super-secret-key",
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = client.invoke_agent("technical", {"symbol": "XAUUSD"})
+
+    assert result.risk_notes == ["等待宏观数据确认。"]
+
+
+def test_openai_client_normalizes_conditional_direction_to_neutral() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '{"summary":"条件式方向判断。",'
+                                '"direction":"bullish_above_2325_bearish_below_2300",'
+                                '"confidence":0.63,"risk_notes":["等待突破确认"]}'
+                            )
+                        }
+                    }
+                ]
+            },
+            request=request,
+        )
+
+    client = OpenAIAgentClient(
+        base_url="https://api.zhizengzeng.com/v1",
+        model="gpt-4.1-mini",
+        api_key="super-secret-key",
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = client.invoke_agent("technical", {"symbol": "XAUUSD"})
+
+    assert result.direction.value == "neutral"

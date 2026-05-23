@@ -46,9 +46,12 @@ class OpenAIAgentClient:
                 {
                     "role": "system",
                     "content": (
-                        "You are the GoldFXGraph agent named "
-                        f"{agent_name}. Reply with one JSON object containing "
-                        "summary, direction, confidence, risk_notes."
+                        "你是 GoldFXGraph 的分析 agent，名称为 "
+                        f"{agent_name}。请只返回一个 JSON object，"
+                        "字段必须包含 summary、direction、confidence、risk_notes。"
+                        "所有自然语言字段必须使用简体中文，"
+                        "direction 只能使用 bullish、bearish、neutral。"
+                        "risk_notes 必须是字符串数组。"
                     ),
                 },
                 {
@@ -84,6 +87,7 @@ class OpenAIAgentClient:
 
         content = self._extract_message_content(data, agent_name)
         structured_payload = self._parse_content_json(content, agent_name)
+        structured_payload = self._normalize_structured_payload(structured_payload)
 
         try:
             return OpenAIAgentResult.model_validate(structured_payload)
@@ -131,3 +135,24 @@ class OpenAIAgentClient:
             raise OpenAIClientError(f"OpenAI-compatible response returned invalid structured result for {agent_name}")
 
         return parsed
+
+    @staticmethod
+    def _normalize_structured_payload(payload: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(payload)
+
+        risk_notes = normalized.get("risk_notes")
+        if isinstance(risk_notes, str):
+            normalized["risk_notes"] = [risk_notes]
+        elif risk_notes is None:
+            normalized["risk_notes"] = []
+
+        direction = normalized.get("direction")
+        if isinstance(direction, str):
+            lowered = direction.strip().lower()
+            matched = [keyword for keyword in ("bullish", "bearish", "neutral") if keyword in lowered]
+            if len(matched) == 1:
+                normalized["direction"] = matched[0]
+            elif len(matched) > 1:
+                normalized["direction"] = "neutral"
+
+        return normalized
