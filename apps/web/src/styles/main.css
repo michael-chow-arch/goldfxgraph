@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;700;900&family=Noto+Serif+SC:wght@400;500;600;700;900&display=swap");
 
 @tailwind base;
 @tailwind components;
@@ -6,9 +6,9 @@
 
 @layer base {
   :root {
-    color: #f8fafc;
-    background-color: #020617;
-    font-family: "Fira Sans", system-ui, sans-serif;
+    color: #eaf7ee;
+    background-color: #020805;
+    font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
     line-height: 1.5;
     font-weight: 400;
     text-rendering: optimizeLegibility;
@@ -22,8 +22,8 @@
   }
 
   html {
-    background-color: #020617;
-    color: #f8fafc;
+    background-color: #020805;
+    color: #eaf7ee;
     scroll-behavior: smooth;
   }
 
@@ -32,9 +32,13 @@
     min-width: 320px;
     min-height: 100vh;
     background:
-      radial-gradient(circle at top, rgba(34, 197, 94, 0.08), transparent 24%),
-      linear-gradient(180deg, rgba(15, 23, 42, 0.96) 0%, #020617 38%, #020617 100%);
-    color: #f8fafc;
+      radial-gradient(circle at 16% 10%, rgba(46, 230, 107, 0.18), transparent 18%),
+      radial-gradient(circle at 84% 12%, rgba(245, 197, 66, 0.14), transparent 16%),
+      radial-gradient(circle at 50% 0%, rgba(7, 21, 14, 0.92), transparent 18%),
+      radial-gradient(circle at 50% 100%, rgba(39, 199, 255, 0.08), transparent 24%),
+      linear-gradient(180deg, #020805 0%, #04110a 38%, #07150e 100%);
+    color: #eaf7ee;
+    background-attachment: fixed;
   }
 
   button,
@@ -53,26 +57,176 @@
   }
 
   ::selection {
-    background-color: rgba(34, 197, 94, 0.35);
-    color: #f8fafc;
+    background-color: rgba(46, 230, 107, 0.22);
+    color: #eaf7ee;
   }
 }
 
 @layer components {
+  .dashboard-shell {
+    @apply relative isolate;
+  }
+
+  .dashboard-shell::before {
+    content: "";
+    @apply pointer-events-none absolute inset-0 z-0;
+    background-image:
+      linear-gradient(rgba(143, 168, 160, 0.08) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(143, 168, 160, 0.08) 1px, transparent 1px);
+    background-size: 100% 84px, 84px 100%;
+    mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.5), transparent 88%);
+  }
+
+  .dashboard-shell > * {
+    @apply relative z-10;
+  }
+
+  .dashboard-shell::after {
+    content: "";
+    @apply pointer-events-none absolute inset-0 z-0;
+    background:
+      radial-gradient(circle at 50% 0%, rgba(46, 230, 107, 0.12), transparent 18%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 28%, rgba(245, 197, 66, 0.06) 72%, transparent 100%);
+    mix-blend-mode: soft-light;
+    opacity: 0.65;
+  }
+
   .dashboard-panel {
-    @apply border border-slate-800/80 bg-slate-900/75 shadow-glow backdrop-blur-sm;
+    @apply relative overflow-hidden border border-emerald-400/20 bg-[#04110a]/80 shadow-[0_30px_80px_-42px_rgba(0,0,0,0.55)] backdrop-blur-2xl;
+  }
+
+  .dashboard-panel::before {
+    content: "";
+    @apply pointer-events-none absolute inset-0;
+    background:
+      linear-gradient(135deg, rgba(46, 230, 107, 0.08), transparent 24%),
+      radial-gradient(circle at top right, rgba(46, 230, 107, 0.18), transparent 24%),
+      radial-gradient(circle at 18% 18%, rgba(245, 197, 66, 0.12), transparent 16%);
+    mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.8), transparent 85%);
+  }
+
+  .hero-panel {
+    @apply border-emerald-400/20;
+    background:
+      linear-gradient(145deg, rgba(4, 17, 10, 0.95), rgba(2, 8, 5, 0.82)),
+      radial-gradient(circle at top right, rgba(46, 230, 107, 0.2), transparent 24%),
+      radial-gradient(circle at 18% 18%, rgba(245, 197, 66, 0.16), transparent 20%),
+      radial-gradient(circle at 75% 65%, rgba(39, 199, 255, 0.08), transparent 18%);
   }
 
   .panel-title {
-    @apply font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400;
+    @apply font-mono text-[11px] font-semibold tracking-[0.18em] text-emerald-300;
   }
 
   .metric-label {
-    @apply font-mono text-[11px] uppercase tracking-[0.18em] text-slate-500;
+    @apply font-mono text-[11px] tracking-[0.16em] text-emerald-200/70;
   }
 
   .metric-value {
-    @apply font-mono text-lg font-semibold text-slate-50;
+    @apply font-mono text-lg font-semibold text-[#eaf7ee];
+  }
+
+  .metric-card {
+    @apply rounded-2xl border border-emerald-400/20 bg-[#07150e]/75 px-4 py-3.5 shadow-[0_18px_48px_-36px_rgba(0,0,0,0.45)] backdrop-blur-xl transition-all duration-200 hover:border-emerald-300/40 hover:bg-[#0b1d13]/90 hover:shadow-[0_24px_58px_-34px_rgba(46,230,107,0.12)];
+  }
+
+  .metric-card--hero {
+    @apply border-emerald-300/20 bg-[#06130d]/90 p-5;
+  }
+
+  .metric-card--accent {
+    @apply border-amber-300/25 bg-amber-500/10 hover:border-amber-300/40 hover:bg-amber-500/15;
+  }
+
+  .metric-card--soft {
+    @apply bg-[#06130d]/70;
+  }
+
+  .metric-card--embedded {
+    @apply rounded-xl border-emerald-400/15 bg-[#07150e]/80 px-3 py-2.5;
+  }
+
+  .metric-card--empty {
+    @apply border-dashed bg-[#06130d]/70 text-center;
+  }
+
+  .status-pill {
+    @apply inline-flex min-h-8 items-center rounded-full border px-3 py-1 font-mono text-xs font-semibold tracking-[0.14em];
+  }
+
+  .status-pill--loading {
+    @apply border-emerald-300/35 bg-emerald-500/10 text-emerald-200;
+  }
+
+  .status-pill--danger {
+    @apply border-rose-400/35 bg-rose-500/10 text-rose-200;
+  }
+
+  .status-pill--success {
+    @apply border-emerald-400/35 bg-emerald-500/10 text-emerald-200;
+  }
+
+  .status-pill--neutral {
+    @apply border-amber-300/30 bg-amber-500/10 text-amber-100;
+  }
+
+  .action-button {
+    @apply inline-flex h-11 items-center justify-center rounded-full border px-4 text-sm font-semibold transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-0 cursor-pointer;
+  }
+
+  .action-button--primary {
+    @apply border-emerald-300/35 bg-emerald-500/10 text-emerald-100 hover:border-emerald-300/50 hover:bg-emerald-500/20 focus-visible:ring-emerald-300/40;
+  }
+
+  .action-button--secondary {
+    @apply border-emerald-300/20 bg-[#06130d]/75 text-emerald-100 hover:border-emerald-300/30 hover:bg-[#0b1d13] focus-visible:ring-emerald-300/40;
+  }
+
+  .action-button--ghost {
+    @apply border-emerald-300/20 bg-[#06130d]/75 text-emerald-100 hover:border-emerald-300/30 hover:bg-[#0b1d13] focus-visible:ring-emerald-300/40;
+  }
+
+  .display-title {
+    font-family: "Noto Serif SC", "Noto Sans SC", serif;
+    letter-spacing: 0.02em;
+  }
+
+  .section-heading {
+    @apply text-2xl font-semibold tracking-tight text-[#eaf7ee] sm:text-[1.75rem];
+    font-family: "Noto Serif SC", "Noto Sans SC", serif;
+  }
+
+  .section-copy {
+    @apply text-sm leading-7 text-emerald-100/70 sm:text-base;
+  }
+
+  .data-chip {
+    @apply inline-flex min-h-11 items-center gap-3 rounded-2xl border border-emerald-400/20 bg-[#07150e]/80 px-4 py-2.5 text-sm shadow-[0_18px_50px_-28px_rgba(0,0,0,0.35)] backdrop-blur-xl;
+  }
+
+  .data-chip--placeholder {
+    @apply border-dashed text-emerald-100/55;
+  }
+
+  .data-chip__label {
+    @apply font-mono text-[10px] tracking-[0.18em] text-emerald-300;
+  }
+
+  .data-chip__value {
+    @apply font-mono text-sm font-semibold text-[#eaf7ee];
+  }
+
+  .price-display {
+    @apply font-mono text-4xl font-semibold tracking-tight text-amber-200 sm:text-5xl;
+    text-shadow: 0 0 18px rgba(245, 197, 66, 0.16), 0 0 22px rgba(46, 230, 107, 0.08);
+  }
+
+  .price-display--compact {
+    @apply text-3xl sm:text-4xl;
+  }
+
+  .signal-metric {
+    @apply rounded-[24px] border border-emerald-400/20 bg-[#06130d]/80 p-4 shadow-[0_18px_50px_-28px_rgba(0,0,0,0.36)] backdrop-blur-xl;
   }
 }
 
