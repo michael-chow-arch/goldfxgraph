@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: goldfxgraph-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: goldfxgraph
+      POSTGRES_PASSWORD: goldfxgraph
+      POSTGRES_DB: goldfxgraph
+    ports:
+      - "5432:5432"
+    volumes:
+      - goldfxgraph_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U goldfxgraph -d goldfxgraph"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  goldfxgraph_postgres_data:
