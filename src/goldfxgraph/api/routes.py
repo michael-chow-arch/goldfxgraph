@@ -45,11 +45,7 @@ async def create_research_run(request: Request) -> ResearchRunResult:
     except QuoteProviderError as exc:
         message = _quote_provider_message(exc)
         await _mark_failed(repository, run_id, message)
-        raise ApiError(
-            type="quote_provider_unconfigured" if "not configured" in message else "quote_provider_error",
-            message=message,
-            status_code=503,
-        ) from exc
+        raise ApiError(type="quote_provider_error", message=message, status_code=503) from exc
     except CsvValidationError as exc:
         await _mark_failed(repository, run_id, "Market data validation failed")
         raise ApiError(

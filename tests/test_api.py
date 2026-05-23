@@ -10,9 +10,11 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from goldfxgraph.api import routes
 from goldfxgraph.api.app import create_app
+from goldfxgraph.market_data.current_quote import QuoteProviderError
 from goldfxgraph.packages.common.settings import GoldFXGraphSettings
 from goldfxgraph.persistence.repositories import ForecastRepository
-from goldfxgraph.schemas.forecast import AgentVote, ForecastDirection, ForecastResult, ResearchRunResult
+from goldfxgraph.schemas.forecast import AgentVote, CurrentQuote, ForecastDirection, ForecastResult, ResearchRunResult
+from goldfxgraph.workflow import nodes
 
 
 class InMemoryForecastRepository:
@@ -113,24 +115,38 @@ def test_http_exception_detail_is_not_leaked() -> None:
     assert "internal-secret-token" not in response.text
 
 
-def test_create_research_run_returns_structured_error_when_quote_provider_unconfigured(tmp_path: Path) -> None:
+def test_create_research_run_succeeds_without_manual_quote_url_when_discovery_succeeds(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
     csv_path = _write_csv(tmp_path)
     repository = InMemoryForecastRepository()
+    monkeypatch.setattr(
+        nodes.CurrentQuoteProvider,
+        "fetch",
+        lambda self: CurrentQuote(
+            symbol="XAUUSD",
+            current_price=2058.0,
+            data_source="discovered-provider",
+            data_timestamp=datetime.now(UTC),
+        ),
+    )
     settings = GoldFXGraphSettings(
         xauusd_csv_path=csv_path,
         current_quote_url=None,
         current_quote_api_key=SecretStr("quote-secret"),
-        agent_api_key=SecretStr("agent-key"),
+        openai_api_key=SecretStr("agent-key"),
     )
     client = TestClient(create_app(testing=True, settings=settings, repository=cast(ForecastRepository, repository)))
 
     response = client.post("/api/v1/research-runs")
 
-    assert response.status_code == 503
-    assert response.json()["error"]["type"] == "quote_provider_unconfigured"
+    assert response.status_code == 200
+    assert response.json()["status"] == "success"
+    assert response.json()["forecast"]["data_source"] == "discovered-provider"
     assert "agent-key" not in response.text
     assert "quote-secret" not in response.text
-    assert repository.runs[1].status == "failed"
+    assert repository.runs[1].status == "success"
 
 
 def test_create_research_run_uses_cached_langgraph_workflow(monkeypatch: Any) -> None:
@@ -196,14 +212,23 @@ def test_configured_quote_provider_failure_records_sanitized_error(tmp_path: Pat
         current_quote_url="not-a-valid-url",
         current_quote_api_key=SecretStr("quote-secret"),
     )
+    original_fetch = nodes.CurrentQuoteProvider.fetch
+
+    def failing_fetch(self: Any) -> Any:
+        raise QuoteProviderError("Current quote discovery failed")
+
+    nodes.CurrentQuoteProvider.fetch = failing_fetch
     client = TestClient(create_app(testing=True, settings=settings, repository=cast(ForecastRepository, repository)))
 
-    response = client.post("/api/v1/research-runs")
+    try:
+        response = client.post("/api/v1/research-runs")
+    finally:
+        nodes.CurrentQuoteProvider.fetch = original_fetch
 
     assert response.status_code == 503
     assert response.json()["error"]["type"] == "quote_provider_error"
     assert repository.runs[1].status == "failed"
-    assert repository.runs[1].error_message == "Current quote provider request failed"
+    assert repository.runs[1].error_message == "Current quote discovery failed"
     assert "quote-secret" not in response.text
     assert "quote-secret" not in str(repository.runs[1].error_message)
 
