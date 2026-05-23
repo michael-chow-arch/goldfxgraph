@@ -160,12 +160,10 @@ def tool_fetch_current_gold_quote(state: WorkflowState) -> WorkflowState:
     provider = state.get("quote_provider")
     if provider is None:
         settings = state.get("settings") or get_settings()
-        provider_kwargs: dict[str, str] = {}
-        if settings.current_quote_url:
-            provider_kwargs["url"] = settings.current_quote_url
-        if settings.current_quote_api_key:
-            provider_kwargs["api_key"] = settings.current_quote_api_key.get_secret_value()
-        provider = CurrentQuoteProvider(**provider_kwargs)
+        provider = CurrentQuoteProvider(
+            url=settings.current_quote_url,
+            api_key=settings.current_quote_api_key.get_secret_value() if settings.current_quote_api_key else None,
+        )
 
     quote = provider.fetch()
     return {**state, "quote": quote}
