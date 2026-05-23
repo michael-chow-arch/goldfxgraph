@@ -70,6 +70,46 @@ This project does not provide financial advice, investment recommendations, trad
 
 ---
 
+## Local Run And Configuration
+
+The backend reads local configuration from `dev.env` by default. Use `.env.example` as the committed template, then keep real local values only in uncommitted env files.
+
+Supported backend variable names:
+
+- `GOLDFXGRAPH_ENV`
+- `GOLDFXGRAPH_LOG_LEVEL`
+- `GOLDFXGRAPH_DATABASE_URL`
+- `DATABASE_URL` as a compatibility alias when `GOLDFXGRAPH_DATABASE_URL` is not set
+- `GOLDFXGRAPH_XAUUSD_CSV_PATH`
+- `GOLDFXGRAPH_CURRENT_QUOTE_URL`
+- `GOLDFXGRAPH_CURRENT_QUOTE_API_KEY`
+- `GOLDFXGRAPH_AGENT_API_BASE_URL`
+- `GOLDFXGRAPH_AGENT_API_KEY`
+- `GOLDFXGRAPH_OPENAI_API_KEY`
+- `OPENAI_API_KEY` as a compatibility alias when `GOLDFXGRAPH_OPENAI_API_KEY` is not set
+- `GOLDFXGRAPH_OPENAI_MODEL`
+- `GOLDFXGRAPH_OPENAI_BASE_URL`
+
+Frontend runtime variable:
+
+- `VITE_API_BASE_URL`
+
+Recommended local flow:
+
+1. Copy `.env.example` to `dev.env`.
+2. Replace placeholder values such as `change_me` with local secrets.
+3. Keep real API keys and database passwords out of committed files.
+4. Run backend commands with `uv run ...` so they pick up the same local environment.
+
+Example:
+
+```bash
+cp .env.example dev.env
+uv run pytest tests/test_settings.py -q
+```
+
+---
+
 ## License
 
 MIT
