@@ -7,6 +7,10 @@
 - **WHEN** 后端在本地开发环境启动
 - **THEN** 系统 MUST 能从 `dev.env` 或环境变量读取 `GOLDFXGRAPH_ENV`、`GOLDFXGRAPH_LOG_LEVEL`、`GOLDFXGRAPH_DATABASE_URL`、`GOLDFXGRAPH_XAUUSD_CSV_PATH`、`GOLDFXGRAPH_OPENAI_BASE_URL`、`GOLDFXGRAPH_OPENAI_MODEL` 和 `OPENAI_API_KEY`
 
+#### Scenario: committed 配置文件不包含真实 secret
+- **WHEN** 仓库提交 `.env.example`、`dev.env` 或其他示例配置文件
+- **THEN** 这些文件 MUST 只包含 placeholder 或非敏感默认值，不得提交真实 `DATABASE_URL` 密码或 `OPENAI_API_KEY`
+
 #### Scenario: 兼容通用数据库变量
 - **WHEN** 部署环境仅提供 `DATABASE_URL`
 - **THEN** 系统 MUST 能将其作为 `database_url` fallback 使用，除非显式 `GOLDFXGRAPH_DATABASE_URL` 已设置
