@@ -41,9 +41,13 @@ class CurrentQuoteProvider:
         last_error: QuoteProviderError | None = None
 
         with httpx.Client(transport=self.transport, timeout=10) as client:
-            for index, candidate_url in enumerate(urls):
+            for candidate_url in urls:
                 try:
-                    return self._fetch_from_candidate(client, candidate_url, is_primary=index == 0)
+                    return self._fetch_from_candidate(
+                        client,
+                        candidate_url,
+                        is_primary=bool(self.url and candidate_url == self.url),
+                    )
                 except QuoteProviderError as exc:
                     last_error = exc
                     continue
