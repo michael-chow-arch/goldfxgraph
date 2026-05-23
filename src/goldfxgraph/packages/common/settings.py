@@ -20,6 +20,9 @@ class GoldFXGraphSettings(BaseSettings):
     current_quote_api_key: SecretStr | None = None
     agent_api_base_url: str | None = None
     agent_api_key: SecretStr | None = None
+    eod_backfill_timezone: str = "America/New_York"
+    eod_backfill_cutoff_hour: int = 17
+    eod_backfill_cutoff_minute: int = 0
     openai_api_key: SecretStr | None = Field(
         default=None,
         validation_alias=AliasChoices("GOLDFXGRAPH_OPENAI_API_KEY", "OPENAI_API_KEY"),
