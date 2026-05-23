@@ -6,6 +6,7 @@
 
 **Goals:**
 - 兼容 `DATABASE_URL` 与 OpenAI 风格配置，不破坏现有 `GOLDFXGRAPH_*` 配置
+- 明确本地配置文件落点，让后端可直接按 OpenAI 风格变量运行
 - 为多 Agent 节点提供直接可用的 OpenAI-compatible 调用路径
 - 去除研究运行对手工 quote URL 的强依赖
 - 保持结构化输出、持久化和前端 contract 稳定
@@ -22,13 +23,15 @@
 
 优先读取 `GOLDFXGRAPH_DATABASE_URL`、`GOLDFXGRAPH_OPENAI_*`，同时接受 `DATABASE_URL`、`OPENAI_API_KEY` 作为 fallback。这样既兼容当前项目约定，也兼容用户提供的通用环境变量。
 
+本地开发配置文件仍使用仓库根目录的 `dev.env` / `.env.example` 作为落点，但 committed 文件只能写 placeholder。真实 `DATABASE_URL` 和 `OPENAI_API_KEY` 仅写入本地未提交配置。
+
 ### 2. Agent 层新增 OpenAI-compatible client，而不是继续拼自定义 endpoint
 
 继续使用 `/agents/{name}` 会让配置和服务协议都绑定到项目私有实现。新增 client 封装后，workflow 节点只关心“请求一个结构化分析结果”，底层则可以用 OpenAI-compatible `chat/completions` 或等价 JSON 输出能力实现。
 
 ### 3. Quote discovery tool 负责真实数据采集，LLM 不直接承担查价真实性
 
-如果把“实时金价查询”交给 LLM 自己搜索，很难验证来源与时间，也不利于测试。这里继续保持工具节点边界：工具负责从候选公开源查询真实价格，agent 只消费结构化 quote 进行分析。
+如果把“实时金价查询”完全交给 LLM 自己搜索，很难验证来源与时间，也不利于测试。这里继续保持工具节点边界：工具负责从多个公开可获取的候选 source 查询真实价格，agent 只消费结构化 quote 进行分析。
 
 ## Risks / Trade-offs
 

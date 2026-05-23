@@ -6,6 +6,7 @@
 
 - 将多 Agent 分析从自定义 `/agents/{name}` HTTP 协议扩展为直接兼容 OpenAI-compatible API。
 - 增加 `DATABASE_URL`、`OPENAI_API_KEY`、`GOLDFXGRAPH_OPENAI_MODEL`、`GOLDFXGRAPH_OPENAI_BASE_URL` 配置兼容。
+- 调整本地开发配置文件约定，使项目可以直接以这组 OpenAI 风格变量启动，但 committed 配置文件仅保留 placeholder，不提交真实 secret。
 - 将实时金价获取改为后端内置的自动 quote discovery tool，不再要求用户手填 quote URL。
 - 保持 FastAPI、LangGraph、结构化 forecast 输出和 PostgreSQL 持久化边界不变。
 

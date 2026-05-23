@@ -20,15 +20,23 @@
 - **THEN** 系统 MUST 返回指定 research run 的状态、输入摘要、预测结果和错误信息（如有）
 
 ### Requirement: Backend configuration is environment driven
-系统 SHALL 从环境变量或开发配置文件加载运行配置，并支持配置数据库 URL、XAUUSD CSV 路径、current quote 数据源、agent API 地址和 agent API key。
+系统 SHALL 从环境变量或开发配置文件加载运行配置，并支持配置数据库 URL、XAUUSD CSV 路径、OpenAI-compatible 模型地址、模型名称和 API key，同时兼容通用环境变量别名。
 
 #### Scenario: 加载本地开发配置
 - **WHEN** 后端在本地开发环境启动
-- **THEN** 系统 MUST 能从 `dev.env` 或环境变量读取 `GOLDFXGRAPH_ENV`、`GOLDFXGRAPH_LOG_LEVEL`、`GOLDFXGRAPH_DATABASE_URL`、`GOLDFXGRAPH_XAUUSD_CSV_PATH`、`GOLDFXGRAPH_AGENT_API_BASE_URL` 和 `GOLDFXGRAPH_AGENT_API_KEY`
+- **THEN** 系统 MUST 能从 `dev.env` 或环境变量读取 `GOLDFXGRAPH_ENV`、`GOLDFXGRAPH_LOG_LEVEL`、`GOLDFXGRAPH_DATABASE_URL`、`GOLDFXGRAPH_XAUUSD_CSV_PATH`、`GOLDFXGRAPH_OPENAI_BASE_URL`、`GOLDFXGRAPH_OPENAI_MODEL` 和 `OPENAI_API_KEY`
 
-#### Scenario: 保护 agent api key
+#### Scenario: committed 配置文件不包含真实 secret
+- **WHEN** 仓库提交 `.env.example`、`dev.env` 或其他示例配置文件
+- **THEN** 这些文件 MUST 只包含 placeholder 或非敏感默认值，不得提交真实 `DATABASE_URL` 密码或 `OPENAI_API_KEY`
+
+#### Scenario: 兼容通用数据库变量
+- **WHEN** 部署环境仅提供 `DATABASE_URL`
+- **THEN** 系统 MUST 能将其作为 `database_url` fallback 使用，除非显式 `GOLDFXGRAPH_DATABASE_URL` 已设置
+
+#### Scenario: 保护模型 API key
 - **WHEN** API 返回配置相关错误或运行结果
-- **THEN** 系统 MUST NOT 在响应、日志或前端资源中泄露真实 `GOLDFXGRAPH_AGENT_API_KEY`
+- **THEN** 系统 MUST NOT 在响应、日志或前端资源中泄露真实 API key
 
 ### Requirement: API returns structured forecast contracts
 系统 SHALL 使用 Pydantic models 定义 API 响应，不得只返回自由文本预测报告。
@@ -44,6 +52,10 @@
 ### Requirement: API errors are explicit and frontend consumable
 系统 SHALL 返回清晰、稳定的错误结构，便于前端展示 loading、empty、error 和 success 状态。
 
-#### Scenario: 市场数据不可用
-- **WHEN** CSV 缺失、字段不合法或 current quote provider 获取失败
-- **THEN** API MUST 返回包含错误类型和可读消息的响应，而不是返回伪造预测结果
+#### Scenario: 创建研究运行不依赖手工 quote URL
+- **WHEN** 调用方请求 `POST /api/v1/research-runs`
+- **THEN** 系统 MUST 在未配置手工 current quote URL 的情况下，仍尝试通过内部 quote discovery tool 完成研究流程
+
+#### Scenario: 自动查价全部失败
+- **WHEN** 内部 quote discovery tool 无法获得有效实时金价
+- **THEN** API MUST 返回明确的结构化错误，并记录 research run 失败状态
