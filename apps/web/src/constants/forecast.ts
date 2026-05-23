@@ -7,17 +7,17 @@ export const DIRECTION_LABELS: Record<ForecastDirection, string> = {
 };
 
 export const DIRECTION_STYLES: Record<ForecastDirection, string> = {
-  bullish: "border-emerald-500/35 bg-emerald-500/10 text-emerald-300",
-  bearish: "border-orange-500/35 bg-orange-500/10 text-orange-300",
-  neutral: "border-sky-500/35 bg-sky-500/10 text-sky-300",
+  bullish: "border-emerald-300/35 bg-emerald-500/10 text-emerald-200",
+  bearish: "border-rose-400/35 bg-rose-500/10 text-rose-200",
+  neutral: "border-amber-300/30 bg-amber-500/10 text-amber-100",
 };
 
 export const AGENT_LABELS: Record<string, string> = {
-  technical: "技术 Agent",
-  macro: "宏观 Agent",
-  news: "新闻 Agent",
-  risk: "风险 Agent",
-  planner: "预测规划 Agent",
+  technical: "技术分析",
+  macro: "宏观分析",
+  news: "新闻分析",
+  risk: "风险分析",
+  planner: "预测规划",
 };
 
 export const SUMMARY_SECTIONS = [
@@ -27,4 +27,4 @@ export const SUMMARY_SECTIONS = [
   { key: "risk_summary", title: "风险分析" },
 ] as const;
 
-export const EMPTY_FORECAST_MESSAGE = "尚未生成可展示的最新研究结果。";
+export const EMPTY_FORECAST_MESSAGE = "当前还没有可展示的最新研究结果，等研究任务完成后这里会自动更新。";
