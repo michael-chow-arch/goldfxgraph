@@ -59,41 +59,106 @@ def test_daily_bar_rejects_non_finite_or_negative_values() -> None:
         DailyBar(date=date(2024, 1, 1), open=1, high=float("inf"), low=1, close=1)
 
 
-def test_quote_provider_requires_configured_url() -> None:
-    provider = CurrentQuoteProvider(url=None, api_key=None)
+def test_quote_provider_tries_multiple_sources_until_success() -> None:
+    requested_urls: list[str] = []
 
-    with pytest.raises(QuoteProviderError, match="not configured"):
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if request.url.host == "first.example.test":
+            return httpx.Response(503, request=request)
+        if request.url.host == "second.example.test":
+            return httpx.Response(
+                200,
+                json={"close": 2058.5, "data_timestamp": "2024-01-01T00:00:00Z"},
+                request=request,
+            )
+        return httpx.Response(500, request=request)
+
+    provider = CurrentQuoteProvider(
+        url="https://first.example.test/latest?apikey=secret",
+        api_key="token",
+        candidate_urls=[
+            "https://second.example.test/quote?apikey=backup-secret",
+            "https://third.example.test/quote",
+        ],
+        transport=httpx.MockTransport(handler),
+    )
+
+    quote = provider.fetch()
+
+    assert requested_urls == [
+        "https://first.example.test/latest?apikey=secret",
+        "https://second.example.test/quote?apikey=backup-secret",
+    ]
+    assert quote.current_price == 2058.5
+    assert quote.data_source == "second.example.test"
+
+
+def test_quote_provider_returns_controlled_error_when_all_sources_fail() -> None:
+    requested_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if request.url.host == "first.example.test":
+            return httpx.Response(500, request=request)
+        return httpx.Response(200, json={"price": "nan", "source": "mock-feed"}, request=request)
+
+    provider = CurrentQuoteProvider(
+        url="https://first.example.test/latest?apikey=secret",
+        api_key=None,
+        candidate_urls=["https://second.example.test/quote?token=secret-backup"],
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(QuoteProviderError, match="Current quote discovery failed"):
+        provider.fetch()
+
+    assert requested_urls == [
+        "https://first.example.test/latest?apikey=secret",
+        "https://second.example.test/quote?token=secret-backup",
+    ]
+
+
+def test_quote_provider_rejects_non_finite_price() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"price": "nan", "source": "unit"}, request=request)
+
+    provider = CurrentQuoteProvider(
+        url="https://quote.example.test/latest?apikey=secret",
+        api_key=None,
+        candidate_urls=[],
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(QuoteProviderError, match="Current quote discovery failed"):
         provider.fetch()
 
 
-def test_quote_provider_rejects_non_finite_price(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_get(*args, **kwargs) -> httpx.Response:
-        return httpx.Response(200, json={"price": "nan", "source": "unit"}, request=httpx.Request("GET", args[0]))
-
-    monkeypatch.setattr(httpx, "get", fake_get)
-    provider = CurrentQuoteProvider(url="https://quote.example.test/latest?apikey=secret", api_key=None)
-
-    with pytest.raises(QuoteProviderError, match="invalid price"):
-        provider.fetch()
-
-
-def test_quote_provider_sanitizes_url_fallback_source(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_quote_provider_sanitizes_url_fallback_source() -> None:
     captured_headers = {}
 
-    def fake_get(*args, **kwargs) -> httpx.Response:
-        captured_headers.update(kwargs.get("headers") or {})
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_headers.update(request.headers)
         return httpx.Response(
             200,
-            json={"price": 2050.5, "timestamp": "2024-01-01T00:00:00Z"},
-            request=httpx.Request("GET", args[0]),
+            json={
+                "price": 2050.5,
+                "timestamp": "2024-01-01T00:00:00Z",
+                "source": "https://quote.example.test/latest?apikey=secret",
+            },
+            request=request,
         )
 
-    monkeypatch.setattr(httpx, "get", fake_get)
-    provider = CurrentQuoteProvider(url="https://quote.example.test/latest?apikey=secret", api_key="token")
+    provider = CurrentQuoteProvider(
+        url="https://quote.example.test/latest?apikey=secret",
+        api_key="token",
+        candidate_urls=[],
+        transport=httpx.MockTransport(handler),
+    )
 
     quote = provider.fetch()
 
     assert quote.current_price == 2050.5
     assert quote.data_source == "quote.example.test"
     assert "secret" not in quote.data_source
-    assert captured_headers["Authorization"] == "Bearer token"
+    assert captured_headers["authorization"] == "Bearer token"
