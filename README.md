@@ -79,7 +79,7 @@ Supported backend variable names:
 - `GOLDFXGRAPH_ENV`
 - `GOLDFXGRAPH_LOG_LEVEL`
 - `GOLDFXGRAPH_DATABASE_URL`
-- `DATABASE_URL` as a compatibility alias when `GOLDFXGRAPH_DATABASE_URL` is not set
+- `DATABASE_URL` as a compatibility alias when `GOLDFXGRAPH_DATABASE_URL` is unset or cleared
 - `GOLDFXGRAPH_XAUUSD_CSV_PATH`
 - `GOLDFXGRAPH_CURRENT_QUOTE_URL`
 - `GOLDFXGRAPH_CURRENT_QUOTE_API_KEY`
@@ -96,8 +96,9 @@ Recommended local flow:
 
 1. Copy `.env.example` to `dev.env`.
 2. Replace placeholder values such as `change_me` with local secrets.
-3. Keep real API keys and database passwords out of committed files.
-4. The application settings layer reads `dev.env` by default, so backend commands such as `uv run ...` will use those values when the app loads its settings.
+3. If you prefer the compatibility aliases `DATABASE_URL` or `OPENAI_API_KEY`, leave the corresponding `GOLDFXGRAPH_*` key blank or remove it from `dev.env`.
+4. Keep real API keys and database passwords out of committed files.
+5. The application settings layer reads `dev.env` by default, so backend commands such as `uv run ...` will use those values when the app loads its settings.
 
 Example:
 
