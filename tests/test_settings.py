@@ -6,6 +6,13 @@ from pytest import MonkeyPatch
 from goldfxgraph.packages.common.settings import GoldFXGraphSettings, load_settings
 
 
+def _clear_openai_and_database_overrides(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("GOLDFXGRAPH_DATABASE_URL", raising=False)
+    monkeypatch.delenv("GOLDFXGRAPH_OPENAI_API_KEY", raising=False)
+
+
 def test_settings_loads_from_explicit_env_file(tmp_path: Path) -> None:
     env_file = tmp_path / "dev.env"
     env_file.write_text(
@@ -67,6 +74,7 @@ def test_environment_variables_override_env_file(tmp_path: Path, monkeypatch: Mo
 
 
 def test_settings_support_legacy_env_aliases(monkeypatch: MonkeyPatch) -> None:
+    _clear_openai_and_database_overrides(monkeypatch)
     monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://legacy:pw@localhost:5432/legacy_db")
     monkeypatch.setenv("OPENAI_API_KEY", "legacy-openai-key")
     monkeypatch.setenv("GOLDFXGRAPH_OPENAI_MODEL", "gpt-4.1-mini")
@@ -82,6 +90,7 @@ def test_settings_support_legacy_env_aliases(monkeypatch: MonkeyPatch) -> None:
 
 
 def test_settings_prefers_goldfxgraph_database_url_over_legacy_alias(monkeypatch: MonkeyPatch) -> None:
+    _clear_openai_and_database_overrides(monkeypatch)
     monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://legacy:pw@localhost:5432/legacy_db")
     monkeypatch.setenv(
         "GOLDFXGRAPH_DATABASE_URL",
@@ -93,7 +102,8 @@ def test_settings_prefers_goldfxgraph_database_url_over_legacy_alias(monkeypatch
     assert settings.database_url == "postgresql+asyncpg://preferred:pw@localhost:5432/preferred_db"
 
 
-def test_load_settings_supports_legacy_aliases_from_env_file(tmp_path: Path) -> None:
+def test_load_settings_supports_legacy_aliases_from_env_file(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    _clear_openai_and_database_overrides(monkeypatch)
     env_file = tmp_path / "dev.env"
     env_file.write_text(
         "\n".join(
@@ -116,7 +126,10 @@ def test_load_settings_supports_legacy_aliases_from_env_file(tmp_path: Path) -> 
     assert settings.openai_base_url == "https://api.zhizengzeng.com/v1"
 
 
-def test_load_settings_prefers_goldfxgraph_keys_over_legacy_aliases_in_env_file(tmp_path: Path) -> None:
+def test_load_settings_prefers_goldfxgraph_keys_over_legacy_aliases_in_env_file(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    _clear_openai_and_database_overrides(monkeypatch)
     env_file = tmp_path / "dev.env"
     env_file.write_text(
         "\n".join(

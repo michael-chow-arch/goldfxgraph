@@ -30,19 +30,22 @@ class GoldFXGraphSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="GOLDFXGRAPH_", extra="ignore", populate_by_name=True)
 
 
-_ENV_FILE_FIELD_KEYS: dict[str, tuple[str, ...]] = {
-    "env": ("GOLDFXGRAPH_ENV",),
-    "log_level": ("GOLDFXGRAPH_LOG_LEVEL",),
-    "database_url": ("GOLDFXGRAPH_DATABASE_URL", "DATABASE_URL"),
-    "xauusd_csv_path": ("GOLDFXGRAPH_XAUUSD_CSV_PATH",),
-    "current_quote_url": ("GOLDFXGRAPH_CURRENT_QUOTE_URL",),
-    "current_quote_api_key": ("GOLDFXGRAPH_CURRENT_QUOTE_API_KEY",),
-    "agent_api_base_url": ("GOLDFXGRAPH_AGENT_API_BASE_URL",),
-    "agent_api_key": ("GOLDFXGRAPH_AGENT_API_KEY",),
-    "openai_api_key": ("GOLDFXGRAPH_OPENAI_API_KEY", "OPENAI_API_KEY"),
-    "openai_model": ("GOLDFXGRAPH_OPENAI_MODEL",),
-    "openai_base_url": ("GOLDFXGRAPH_OPENAI_BASE_URL",),
-}
+def _env_file_field_keys() -> dict[str, tuple[str, ...]]:
+    values: dict[str, tuple[str, ...]] = {}
+    env_prefix = GoldFXGraphSettings.model_config.get("env_prefix", "")
+
+    for field_name, field_info in GoldFXGraphSettings.model_fields.items():
+        validation_alias = field_info.validation_alias
+        if isinstance(validation_alias, AliasChoices):
+            values[field_name] = tuple(str(choice) for choice in validation_alias.choices)
+            continue
+        if isinstance(validation_alias, str):
+            values[field_name] = (validation_alias,)
+            continue
+
+        values[field_name] = (f"{env_prefix}{field_name.upper()}",)
+
+    return values
 
 
 def _settings_values_from_env_file(env_file: Path) -> dict[str, Any]:
@@ -51,7 +54,7 @@ def _settings_values_from_env_file(env_file: Path) -> dict[str, Any]:
         return values
 
     env_file_values = dotenv_values(env_file)
-    for field_name, keys in _ENV_FILE_FIELD_KEYS.items():
+    for field_name, keys in _env_file_field_keys().items():
         if any(key in os.environ for key in keys):
             continue
 
