@@ -123,7 +123,7 @@ def _parse_locations(html_text: str) -> list[PizzaLocation]:
     pattern = re.compile(
         (
             r'<div data-place-id=[\'"]([^\'"]+)[\'"][^>]*>.*?<h3[^>]*>(.*?)</h3>.*?'
-            r'<span[^>]*>(\d+)<!-- -->% SPIKE</span>.*?<div[^>]*>([^<]+)</div>'
+            r"<span[^>]*>(\d+)<!-- -->% SPIKE</span>.*?<div[^>]*>([^<]+)</div>"
         ),
         re.S,
     )

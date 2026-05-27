@@ -1,6 +1,6 @@
 <template>
   <section class="market-candle-chart">
-    <div class="flex items-start justify-between gap-4">
+    <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px] xl:items-start">
       <div class="space-y-2">
         <p class="panel-title">{{ title }}</p>
         <h3 class="section-heading">{{ subtitle }}</h3>
@@ -8,15 +8,17 @@
           {{ description }}
         </p>
       </div>
-      <div v-if="latestBar" class="text-right">
-        <p class="font-mono text-[11px] tracking-[0.18em] text-slate-300/55">最新完成日线</p>
-        <p class="mt-1 font-mono text-sm text-slate-200/80">{{ formatDate(latestBar.date) }}</p>
+      <div v-if="latestBar" class="self-start rounded-[24px] border border-slate-400/15 bg-[#0b1220]/75 p-4 shadow-[0_18px_44px_-30px_rgba(0,0,0,0.42)]">
+        <div class="flex items-center justify-between gap-3">
+          <p class="font-mono text-[10px] tracking-[0.18em] text-slate-300/55">最近一根日线</p>
+          <span class="analysis-badge analysis-badge--accent">辅助判断</span>
+        </div>
         <p class="mt-2 font-mono text-lg font-semibold text-amber-200">{{ formatPrice(latestBar.close) }}</p>
         <p class="mt-1 font-mono text-[11px] tracking-[0.16em] text-slate-300/50">悬停查看开高低收</p>
         <div v-if="hasCurrentPrice" class="mt-3 rounded-2xl border border-cyan-400/15 bg-cyan-400/10 px-3 py-2 text-left">
-          <p class="font-mono text-[10px] tracking-[0.18em] text-cyan-100/60">实时参考价</p>
+          <p class="font-mono text-[10px] tracking-[0.18em] text-cyan-100/60">15分钟更新价</p>
           <p class="mt-1 font-mono text-sm font-semibold text-cyan-100">{{ formatPrice(currentPriceDisplayValue) }}</p>
-          <p class="mt-1 font-mono text-[10px] tracking-[0.16em] text-cyan-50/45">TradingView 最新快照</p>
+          <p class="mt-1 font-mono text-[10px] tracking-[0.16em] text-cyan-50/45">TradingView 行情快照</p>
         </div>
       </div>
     </div>
@@ -304,9 +306,9 @@ const props = withDefaults(
     description?: string;
   }>(),
   {
-    title: "黄金日线 K 线",
-    subtitle: "最新一根日线",
-    description: "黄金日线直接从行情数据读取，用于展示最近一根日线结构、收盘节奏和波动区间。",
+    title: "K线图",
+    subtitle: "黄金日线结构",
+    description: "黄金行情每 15 分钟抓取一次，用于展示最近日线结构、收盘节奏和波动区间。",
   },
 );
 

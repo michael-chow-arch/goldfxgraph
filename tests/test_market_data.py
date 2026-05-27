@@ -1,6 +1,6 @@
 from pathlib import Path
+from typing import Any
 
-import httpx
 import pytest
 
 from goldfxgraph.cli import main as goldfxgraph_main
@@ -10,6 +10,41 @@ from goldfxgraph.market_data.ingest import import_xauusd_daily_csv_to_db
 from goldfxgraph.persistence.database import create_session_factory, init_models
 from goldfxgraph.persistence.repositories import MarketDataRepository
 from goldfxgraph.schemas.forecast import DailyBar
+
+
+class FakeQuoteSocket:
+    def __init__(self, frames: list[str | bytes]) -> None:
+        self.frames = frames
+        self.sent_messages: list[str] = []
+        self._index = 0
+
+    def __enter__(self) -> "FakeQuoteSocket":
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+        return False
+
+    def send(self, message: str) -> None:
+        self.sent_messages.append(message)
+
+    def recv(self, timeout: float | None = None) -> str | bytes:
+        if self._index >= len(self.frames):
+            raise TimeoutError("fake socket exhausted")
+        frame = self.frames[self._index]
+        self._index += 1
+        return frame
+
+
+def _build_socket_factory(frames: list[str | bytes], captured: list[dict[str, Any]]) -> Any:
+    def factory(**kwargs: Any) -> FakeQuoteSocket:
+        captured.append(kwargs)
+        return FakeQuoteSocket(frames)
+
+    return factory
+
+
+def _socket_frame(payload: str) -> str:
+    return f"~m~{len(payload)}~m~{payload}"
 
 
 def test_load_xauusd_daily_csv_sorts_and_preserves_optional_fields(tmp_path: Path) -> None:
@@ -126,106 +161,122 @@ def test_daily_bar_rejects_non_finite_or_negative_values() -> None:
 
 
 def test_current_quote_provider_uses_tradingview_only_and_ignores_legacy_candidates() -> None:
-    requested_urls: list[str] = []
-    fixture_html = (Path(__file__).parent / "fixtures" / "tradingview_xauusd_page.html").read_text(encoding="utf-8")
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requested_urls.append(str(request.url))
-        if request.url.host == "www.tradingview.com":
-            return httpx.Response(200, text=fixture_html, request=request)
-        if request.url.host == "legacy-quote.example.test":
-            return httpx.Response(500, request=request)
-        return httpx.Response(500, request=request)
+    captured: list[dict[str, Any]] = []
+    socket_factory = _build_socket_factory(
+        [
+            _socket_frame('{"m":"qsd","p":["qs_goldfxgraph",{"n":"FX:XAUUSD","s":"ok","v":{"lp":4427.31}}]}'),
+            _socket_frame('{"m":"qsd","p":["qs_goldfxgraph",{"n":"FX:XAUUSD","s":"ok","v":{"lp_time":1779890056}}]}'),
+        ],
+        captured,
+    )
 
     provider = CurrentQuoteProvider(
         url=None,
         api_key="token",
         source_name="legacy-source-name",
         candidate_urls=["https://legacy-quote.example.test/price/XAU"],
-        transport=httpx.MockTransport(handler),
+        socket_factory=socket_factory,
     )
 
     quote = provider.fetch()
 
-    assert requested_urls == ["https://www.tradingview.com/symbols/XAUUSD/"]
+    assert captured[0]["socket_url"].startswith(
+        "wss://data.tradingview.com/socket.io/websocket?from=symbols%2FXAUUSD%2F&date="
+    )
+    assert captured[0]["origin"] == "https://www.tradingview.com"
+    assert captured[0]["referer"] == "https://www.tradingview.com/symbols/XAUUSD/?exchange=FX"
     assert quote.symbol == "XAUUSD"
-    assert quote.current_price == 4567.78
+    assert quote.current_price == 4427.31
     assert quote.data_source == "TradingView"
-    assert quote.data_timestamp.isoformat() == "2026-05-25T02:09:05.812308+00:00"
+    assert quote.data_timestamp.isoformat() == "2026-05-27T13:54:16+00:00"
 
 
-def test_tradingview_quote_provider_parses_fixture_html() -> None:
+def test_tradingview_quote_provider_parses_quote_websocket_frames() -> None:
     from goldfxgraph.market_data.tradingview_quote import TradingViewQuoteProvider
 
-    fixture_html = (Path(__file__).parent / "fixtures" / "tradingview_xauusd_page.html").read_text(encoding="utf-8")
+    captured: list[dict[str, Any]] = []
+    socket_factory = _build_socket_factory(
+        [
+            _socket_frame('{"session_id":"0.107699286.0_sin1-charts-free-3-tvbs-dr6j5-5"}'),
+            _socket_frame(
+                '{"m":"qsd","p":["qs_goldfxgraph",{"n":"FX:XAUUSD","s":"ok","v":{"lp":4431.35,"lp_time":1779890010}}]}'
+            ),
+            _socket_frame('{"m":"quote_completed","p":["qs_goldfxgraph","FX:XAUUSD"]}'),
+        ],
+        captured,
+    )
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert str(request.url) == "https://www.tradingview.com/symbols/XAUUSD/"
-        return httpx.Response(200, text=fixture_html, request=request)
-
-    provider = TradingViewQuoteProvider(transport=httpx.MockTransport(handler))
+    provider = TradingViewQuoteProvider(socket_factory=socket_factory)
 
     quote = provider.fetch()
 
     assert quote.symbol == "XAUUSD"
-    assert quote.current_price == 4567.78
+    assert quote.current_price == 4431.35
     assert quote.data_source == "TradingView"
-    assert quote.data_timestamp.isoformat() == "2026-05-25T02:09:05.812308+00:00"
+    assert quote.data_timestamp.isoformat() == "2026-05-27T13:53:30+00:00"
+    assert captured[0]["origin"] == "https://www.tradingview.com"
+    assert captured[0]["referer"] == "https://www.tradingview.com/symbols/XAUUSD/?exchange=FX"
 
 
-def test_tradingview_quote_provider_rejects_broken_fixture_html() -> None:
+def test_tradingview_quote_provider_rejects_missing_lp_time() -> None:
     from goldfxgraph.market_data.tradingview_quote import TradingViewQuoteProvider
 
-    broken_html = (
-        Path(__file__).parent / "fixtures" / "tradingview_xauusd_page_broken.html"
-    ).read_text(encoding="utf-8")
+    socket_factory = _build_socket_factory(
+        [_socket_frame('{"m":"qsd","p":["qs_goldfxgraph",{"n":"FX:XAUUSD","s":"ok","v":{"lp":4431.35}}]}')],
+        [],
+    )
+    provider = TradingViewQuoteProvider(socket_factory=socket_factory)
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, text=broken_html, request=request)
+    with pytest.raises(QuoteProviderError, match="TradingView quote websocket missing live price or timestamp"):
+        provider.fetch()
 
-    provider = TradingViewQuoteProvider(transport=httpx.MockTransport(handler))
 
-    with pytest.raises(QuoteProviderError, match="TradingView quote page missing current price"):
+def test_tradingview_quote_provider_rejects_malformed_socket_payload() -> None:
+    from goldfxgraph.market_data.tradingview_quote import TradingViewQuoteProvider
+
+    socket_factory = _build_socket_factory(["not-a-socket-frame"], [])
+    provider = TradingViewQuoteProvider(socket_factory=socket_factory)
+
+    with pytest.raises(QuoteProviderError, match="TradingView quote websocket missing live price or timestamp"):
         provider.fetch()
 
 
 def test_tradingview_quote_provider_raises_on_network_failure() -> None:
     from goldfxgraph.market_data.tradingview_quote import TradingViewQuoteProvider
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("network down", request=request)
+    def socket_factory(**kwargs: Any) -> FakeQuoteSocket:
+        raise ConnectionError("network down")
 
-    provider = TradingViewQuoteProvider(transport=httpx.MockTransport(handler))
+    provider = TradingViewQuoteProvider(socket_factory=socket_factory)
 
     with pytest.raises(QuoteProviderError, match="TradingView quote request failed"):
         provider.fetch()
 
 
 def test_current_quote_provider_ignores_non_tradingview_url_override() -> None:
-    requested_urls: list[str] = []
-    fixture_html = (Path(__file__).parent / "fixtures" / "tradingview_xauusd_page.html").read_text(encoding="utf-8")
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requested_urls.append(str(request.url))
-        if request.url.host == "www.tradingview.com":
-            return httpx.Response(200, text=fixture_html, request=request)
-        return httpx.Response(
-            500,
-            request=request,
-        )
+    captured: list[dict[str, Any]] = []
+    socket_factory = _build_socket_factory(
+        [
+            _socket_frame('{"m":"qsd","p":["qs_goldfxgraph",{"n":"FX:XAUUSD","s":"ok","v":{"lp":4431.35}}]}'),
+            _socket_frame('{"m":"qsd","p":["qs_goldfxgraph",{"n":"FX:XAUUSD","s":"ok","v":{"lp_time":1779890010}}]}'),
+        ],
+        captured,
+    )
 
     provider = CurrentQuoteProvider(
         url="https://not-tradingview.example.test/latest",
         api_key=None,
         candidate_urls=["https://legacy-quote.example.test/price/XAU"],
-        transport=httpx.MockTransport(handler),
+        socket_factory=socket_factory,
     )
 
     quote = provider.fetch()
 
-    assert requested_urls == ["https://www.tradingview.com/symbols/XAUUSD/"]
+    assert captured[0]["socket_url"].startswith(
+        "wss://data.tradingview.com/socket.io/websocket?from=symbols%2FXAUUSD%2F&date="
+    )
     assert quote.symbol == "XAUUSD"
-    assert quote.current_price == 4567.78
+    assert quote.current_price == 4431.35
     assert quote.data_source == "TradingView"
 
 
@@ -241,9 +292,7 @@ def test_yahoo_history_fetcher_is_removed_from_daily_bar_backfill() -> None:
         )
 
 
-def test_goldfxgraph_cli_dispatches_import_market_data_command(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_goldfxgraph_cli_dispatches_import_market_data_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     csv_path = tmp_path / "xauusd.csv"
     captured: dict[str, object] = {}
 

@@ -1,4 +1,14 @@
 export type ForecastDirection = "bullish" | "bearish" | "neutral";
+export type SchedulerRunStatusValue = "running" | "success" | "failed" | "skipped";
+export type SchedulerAgentStatusValue = "pending" | "running" | "success" | "failed";
+
+export interface ForecastWindowDirection {
+  window_label: string;
+  direction: ForecastDirection;
+  strength: "strong" | "moderate" | "mild";
+  confidence: number;
+  reason: string;
+}
 
 export interface DailyBar {
   date: string;
@@ -31,7 +41,10 @@ export interface ForecastResult {
   daily_low: number;
   daily_close: number;
   direction: ForecastDirection;
+  window_directions: ForecastWindowDirection[];
   entry_price?: number | null;
+  entry_price_low?: number | null;
+  entry_price_high?: number | null;
   take_profit_price?: number | null;
   stop_loss_price?: number | null;
   holding_period: string;
@@ -47,6 +60,31 @@ export interface ForecastResult {
   agent_votes: AgentVote[];
   risk_notes: string[];
   disclaimer: string;
+}
+
+export interface SchedulerAgentStatus {
+  agent: string;
+  status: SchedulerAgentStatusValue;
+  error?: string | null;
+}
+
+export interface SchedulerAgentDiagnostic {
+  agent: string;
+  stage: string;
+  status: string;
+  message: string;
+  detail?: string | null;
+}
+
+export interface SchedulerRunStatus {
+  id?: number | null;
+  status: SchedulerRunStatusValue;
+  started_at: string;
+  completed_at?: string | null;
+  current_stage: string;
+  agent_statuses: SchedulerAgentStatus[];
+  agent_diagnostics: SchedulerAgentDiagnostic[];
+  last_error?: string | null;
 }
 
 export interface ForecastEvaluationResult {

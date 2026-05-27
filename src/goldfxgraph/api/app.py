@@ -12,13 +12,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from goldfxgraph.api.errors import register_error_handlers
 from goldfxgraph.api.routes import router
-from goldfxgraph.backfill.maintenance import run_eod_maintenance
-from goldfxgraph.backfill.scheduler import EodMaintenanceSchedulerHandle, start_eod_maintenance_scheduler
 from goldfxgraph.diagnostics.agent_health import format_agent_health_check_report, run_agent_health_check
 from goldfxgraph.packages.common.settings import GoldFXGraphSettings, get_settings
 from goldfxgraph.persistence.database import create_session_factory, init_models
 from goldfxgraph.persistence.repositories import ForecastRepository
-from goldfxgraph.schemas.forecast import DailyBar, ForecastResult, ResearchRunResult
+from goldfxgraph.research.scheduler import ResearchSchedulerHandle, start_research_scheduler
+from goldfxgraph.schemas.forecast import DailyBar, ForecastResult, ResearchRunResult, SchedulerRunStatus
 
 LOCAL_FRONTEND_ORIGINS = (
     "http://localhost:5173",
@@ -43,7 +42,7 @@ def create_app(
         app.state.settings = resolved_settings
         app.state.testing = testing
         session_factory = None
-        maintenance_handle: EodMaintenanceSchedulerHandle | None = None
+        scheduler_handle: ResearchSchedulerHandle | None = None
         if repository is not None:
             app.state.repository = repository
         elif testing:
@@ -55,18 +54,6 @@ def create_app(
             app.state.repository = ForecastRepository(session_factory)
 
         if not testing:
-            startup_maintenance = await run_eod_maintenance(
-                settings=resolved_settings,
-                repository=app.state.repository,
-                now=datetime.now(UTC),
-            )
-            if startup_maintenance.status == "failed":
-                raise RuntimeError(
-                    "EOD maintenance failed: "
-                    f"backfill={startup_maintenance.backfill.status} "
-                    f"evaluation={startup_maintenance.evaluation.status} "
-                    f"reason={startup_maintenance.backfill.failure_reason or 'unknown'}"
-                )
             try:
                 app.state.agent_health_report = await run_agent_health_check(
                     settings=resolved_settings,
@@ -78,20 +65,20 @@ def create_app(
                 )
             except Exception:  # noqa: BLE001
                 logger.exception("agent health check failed")
-            maintenance_handle = start_eod_maintenance_scheduler(
+            scheduler_handle = start_research_scheduler(
                 settings=resolved_settings,
                 repository=app.state.repository,
             )
-            app.state.eod_maintenance_scheduler = maintenance_handle
+            app.state.research_scheduler = scheduler_handle
 
         try:
             yield
         finally:
-            if maintenance_handle is not None:
-                maintenance_handle.stop_event.set()
-                maintenance_handle.task.cancel()
+            if scheduler_handle is not None:
+                scheduler_handle.stop_event.set()
+                scheduler_handle.task.cancel()
                 try:
-                    await maintenance_handle.task
+                    await scheduler_handle.task
                 except asyncio.CancelledError:
                     pass
             if session_factory is not None:
@@ -127,8 +114,10 @@ class InMemoryForecastRepository:
     def __init__(self) -> None:
         self._next_run_id = 1
         self._next_forecast_id = 1
+        self._next_scheduler_run_id = 1
         self.runs: dict[int, ResearchRunResult] = {}
         self.forecasts: dict[int, ForecastResult] = {}
+        self.scheduler_runs: dict[int, SchedulerRunStatus] = {}
         self.market_bars: dict[tuple[str, date], DailyBar] = {}
 
     async def create_research_run(self, input_summary: dict[str, object]) -> Any:
@@ -159,6 +148,50 @@ class InMemoryForecastRepository:
         self.forecasts[forecast_id] = saved
         self.runs[run_id] = self.runs[run_id].model_copy(update={"forecast": saved})
         return saved
+
+    async def create_scheduler_run(self, input_summary: dict[str, object]) -> Any:
+        run_id = self._next_scheduler_run_id
+        self._next_scheduler_run_id += 1
+        self.scheduler_runs[run_id] = SchedulerRunStatus(
+            id=run_id,
+            status="running",
+            started_at=datetime.now(UTC),
+            current_stage="scheduled",
+            agent_statuses=[],
+            agent_diagnostics=[],
+            last_error=None,
+        )
+        return type("SchedulerRunRecord", (), {"id": run_id})()
+
+    async def update_scheduler_run_stage(
+        self,
+        run_id: int,
+        *,
+        current_stage: str,
+        agent_statuses: list[dict[str, str]] | None = None,
+        agent_diagnostics: list[dict[str, Any]] | None = None,
+        status: str = "running",
+        last_error: str | None = None,
+        completed_at: datetime | None = None,
+    ) -> SchedulerRunStatus:
+        run = self.scheduler_runs[run_id]
+        updated = run.model_copy(
+            update={
+                "status": status,
+                "current_stage": current_stage,
+                "agent_statuses": list(agent_statuses or []),
+                "agent_diagnostics": list(agent_diagnostics or []),
+                "last_error": last_error,
+                "completed_at": completed_at,
+            }
+        )
+        self.scheduler_runs[run_id] = updated
+        return updated
+
+    async def get_latest_scheduler_run(self) -> SchedulerRunStatus | None:
+        if not self.scheduler_runs:
+            return None
+        return self.scheduler_runs[max(self.scheduler_runs)]
 
     async def upsert_market_bars(self, bars: list[DailyBar]) -> int:
         for bar in bars:

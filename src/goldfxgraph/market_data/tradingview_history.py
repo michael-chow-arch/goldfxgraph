@@ -27,6 +27,8 @@ TRADINGVIEW_CHART_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) 
 TRADINGVIEW_AUTH_TOKEN = "unauthorized_user_token"
 TRADINGVIEW_CHART_SERIES_ID = "s1"
 TRADINGVIEW_CHART_SYMBOL_ALIAS = "symbol_1"
+
+
 class TradingViewHistoryError(RuntimeError):
     """TradingView 历史日线拉取或解析失败。"""
 

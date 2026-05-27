@@ -118,6 +118,21 @@ def test_openai_client_wraps_http_errors() -> None:
         client.invoke_agent("technical", {"symbol": "XAUUSD"})
 
 
+def test_openai_client_includes_request_error_chain_in_detail() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    client = OpenAIAgentClient(
+        base_url="https://api.zhizengzeng.com/v1",
+        model="gpt-4.1-mini",
+        api_key="super-secret-key",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(OpenAIClientError, match="ConnectError: connection refused"):
+        client.invoke_agent("news", {"symbol": "XAUUSD"})
+
+
 def test_openai_client_normalizes_string_risk_notes_to_list() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

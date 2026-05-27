@@ -1,37 +1,36 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, cast
 
-import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from goldfxgraph.api import routes
 from goldfxgraph.api.app import create_app
-from goldfxgraph.llm.openai_client import OpenAIAgentClient, OpenAIClientError
-from goldfxgraph.market_data.current_quote import QuoteProviderError
 from goldfxgraph.packages.common.settings import GoldFXGraphSettings
 from goldfxgraph.persistence.repositories import ForecastRepository
 from goldfxgraph.schemas.forecast import (
     AgentVote,
-    CurrentQuote,
     DailyBar,
     ForecastDirection,
     ForecastResult,
+    ForecastWindowDirection,
     ResearchRunResult,
+    SchedulerRunStatus,
 )
-from goldfxgraph.workflow import nodes
 
 
 class InMemoryForecastRepository:
     def __init__(self) -> None:
         self._next_run_id = 1
         self._next_forecast_id = 1
+        self._next_scheduler_run_id = 1
         self.runs: dict[int, ResearchRunResult] = {}
         self.forecasts: dict[int, ForecastResult] = {}
+        self.scheduler_runs: dict[int, SchedulerRunStatus] = {}
         self.market_bars: dict[tuple[str, date], DailyBar] = {}
 
     async def create_research_run(self, input_summary: dict[str, object]) -> Any:
@@ -61,6 +60,50 @@ class InMemoryForecastRepository:
         self.forecasts[saved.id or 0] = saved
         self.runs[run_id] = self.runs[run_id].model_copy(update={"forecast": saved})
         return saved
+
+    async def create_scheduler_run(self, input_summary: dict[str, object]) -> Any:
+        run_id = self._next_scheduler_run_id
+        self._next_scheduler_run_id += 1
+        self.scheduler_runs[run_id] = SchedulerRunStatus(
+            id=run_id,
+            status="running",
+            started_at=datetime.now(UTC),
+            current_stage="scheduled",
+            agent_statuses=[],
+            agent_diagnostics=[],
+            last_error=None,
+        )
+        return type("SchedulerRunRecord", (), {"id": run_id})()
+
+    async def update_scheduler_run_stage(
+        self,
+        run_id: int,
+        *,
+        current_stage: str,
+        agent_statuses: list[dict[str, str]] | None = None,
+        agent_diagnostics: list[dict[str, Any]] | None = None,
+        status: str = "running",
+        last_error: str | None = None,
+        completed_at: datetime | None = None,
+    ) -> SchedulerRunStatus:
+        run = self.scheduler_runs[run_id]
+        updated = run.model_copy(
+            update={
+                "status": status,
+                "current_stage": current_stage,
+                "agent_statuses": list(agent_statuses or []),
+                "agent_diagnostics": list(agent_diagnostics or []),
+                "last_error": last_error,
+                "completed_at": completed_at,
+            }
+        )
+        self.scheduler_runs[run_id] = updated
+        return updated
+
+    async def get_latest_scheduler_run(self) -> SchedulerRunStatus | None:
+        if not self.scheduler_runs:
+            return None
+        return self.scheduler_runs[max(self.scheduler_runs)]
 
     async def upsert_market_bars(self, bars: list[DailyBar]) -> int:
         for bar in bars:
@@ -132,35 +175,40 @@ def test_health_endpoint() -> None:
     assert response.json()["status"] == "ok"
 
 
-def test_startup_fails_when_eod_maintenance_fails(monkeypatch: Any, tmp_path: Path) -> None:
-    async def fake_run_eod_maintenance(**kwargs: Any) -> Any:
-        return type(
-            "Result",
-            (),
-            {
-                "status": "failed",
-                "backfill": type(
-                    "Backfill",
-                    (),
-                    {
-                        "status": "failed",
-                        "failure_reason": "history source unavailable",
-                    },
-                )(),
-                "evaluation": type("Evaluation", (), {"status": "no-op"})(),
-            },
-        )()
+def test_startup_registers_research_scheduler(monkeypatch: Any, tmp_path: Path) -> None:
+    from goldfxgraph.research.scheduler import ResearchSchedulerHandle
 
-    monkeypatch.setattr("goldfxgraph.api.app.run_eod_maintenance", fake_run_eod_maintenance)
+    repository = InMemoryForecastRepository()
+    scheduler_task: asyncio.Task[None] | None = None
+
+    async def fake_health_check(**kwargs: Any) -> Any:
+        return type("HealthReport", (), {"status": "ok"})()
+
+    def fake_start_research_scheduler(**kwargs: Any) -> ResearchSchedulerHandle:
+        nonlocal scheduler_task
+        scheduler_task = asyncio.create_task(asyncio.sleep(3600))
+        return ResearchSchedulerHandle(
+            stop_event=asyncio.Event(),
+            task=scheduler_task,
+            scheduler=type("Scheduler", (), {"latest_status": None})(),
+        )
+
+    monkeypatch.setattr("goldfxgraph.api.app.run_agent_health_check", fake_health_check)
+    monkeypatch.setattr("goldfxgraph.api.app.start_research_scheduler", fake_start_research_scheduler)
 
     settings = GoldFXGraphSettings(
         xauusd_csv_path=tmp_path / "unused.csv",
         database_url="sqlite+aiosqlite:///:memory:",
     )
 
-    with pytest.raises(RuntimeError, match="EOD maintenance failed"):
-        with TestClient(create_app(testing=False, settings=settings)):
-            pass
+    with TestClient(
+        create_app(testing=False, settings=settings, repository=cast(ForecastRepository, repository))
+    ) as client:
+        assert client.app.state.research_scheduler is not None
+        assert client.app.state.research_scheduler.latest_status is None
+
+    assert scheduler_task is not None
+    assert scheduler_task.cancelled()
 
 
 def test_get_market_data_bars_endpoint_returns_recent_daily_bars() -> None:
@@ -228,207 +276,49 @@ def test_http_exception_detail_is_not_leaked() -> None:
     assert "internal-secret-token" not in response.text
 
 
-def test_create_research_run_succeeds_without_manual_quote_url_when_discovery_succeeds(
-    monkeypatch: Any,
-    tmp_path: Path,
-) -> None:
-    repository = InMemoryForecastRepository()
-    _seed_market_data(repository)
-    async def fake_backfill(**kwargs: Any) -> Any:
-        return type("BackfillResult", (), {"status": "no-op", "failure_reason": None})()
+def test_latest_research_status_returns_empty_when_none_exists() -> None:
+    client = TestClient(create_app(testing=True))
 
-    monkeypatch.setattr(nodes, "run_eod_backfill", fake_backfill)
-    monkeypatch.setattr(
-        nodes.CurrentQuoteProvider,
-        "fetch",
-        lambda self: CurrentQuote(
-            symbol="XAUUSD",
-            current_price=2058.0,
-            data_source="TradingView",
-            data_timestamp=datetime.now(UTC),
-        ),
+    response = client.get("/api/v1/research-status/latest")
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "error": {"type": "research_status_not_found", "message": "Research status was not found"}
+    }
+
+
+def test_latest_research_status_returns_seeded_status_without_secret_leak() -> None:
+    repository = InMemoryForecastRepository()
+    repository.scheduler_runs[1] = SchedulerRunStatus(
+        id=1,
+        status="running",
+        started_at=datetime.now(UTC),
+        current_stage="agent_technical_analysis",
+        agent_statuses=[
+            {"agent": "technical", "status": "running"},
+            {"agent": "macro", "status": "pending"},
+        ],
+        last_error=None,
     )
-    settings = GoldFXGraphSettings(
-        xauusd_csv_path=tmp_path / "unused.csv",
-        current_quote_url=None,
-        openai_api_key=SecretStr("agent-key"),
-    )
+    settings = GoldFXGraphSettings(agent_api_key=SecretStr("agent-key"))
     client = TestClient(create_app(testing=True, settings=settings, repository=cast(ForecastRepository, repository)))
 
-    response = client.post("/api/v1/research-runs")
+    response = client.get("/api/v1/research-status/latest")
 
     assert response.status_code == 200
-    assert response.json()["status"] == "success"
-    assert response.json()["forecast"]["data_source"] == "TradingView"
-    assert response.json()["forecast"]["current_price"] == 2058.0
+    body = response.json()
+    assert body["status"] == "running"
+    assert body["current_stage"] == "agent_technical_analysis"
+    assert body["agent_statuses"][0]["status"] == "running"
     assert "agent-key" not in response.text
-    assert "quote-secret" not in response.text
-    assert repository.runs[1].status == "success"
 
 
-def test_create_research_run_returns_market_data_error_when_freshness_preflight_fails(
-    monkeypatch: Any,
-    tmp_path: Path,
-) -> None:
-    repository = InMemoryForecastRepository()
-
-    async def fake_backfill(**kwargs: Any) -> Any:
-        return type(
-            "BackfillResult",
-            (),
-            {
-                "status": "failed",
-                "failure_reason": "TradingView history unavailable",
-            },
-        )()
-
-    monkeypatch.setattr(nodes, "run_eod_backfill", fake_backfill)
-    settings = GoldFXGraphSettings(
-        xauusd_csv_path=tmp_path / "unused.csv",
-        current_quote_url=None,
-        openai_api_key=SecretStr("agent-key"),
-    )
-    client = TestClient(create_app(testing=True, settings=settings, repository=cast(ForecastRepository, repository)))
+def test_manual_research_run_endpoint_is_not_exposed() -> None:
+    client = TestClient(create_app(testing=True))
 
     response = client.post("/api/v1/research-runs")
 
-    assert response.status_code == 503
-    assert response.json()["error"]["type"] == "market_data_error"
-    assert "TradingView history unavailable" in response.json()["error"]["message"]
-    assert repository.runs[1].status == "failed"
-    assert "TradingView history unavailable" in repository.runs[1].error_message
-
-
-def test_create_research_run_surfaces_remote_agent_fallback_in_forecast(
-    monkeypatch: Any,
-    tmp_path: Path,
-) -> None:
-    repository = InMemoryForecastRepository()
-    _seed_market_data(repository)
-    async def fake_backfill(**kwargs: Any) -> Any:
-        return type("BackfillResult", (), {"status": "no-op", "failure_reason": None})()
-
-    monkeypatch.setattr(nodes, "run_eod_backfill", fake_backfill)
-    monkeypatch.setattr(
-        nodes.CurrentQuoteProvider,
-        "fetch",
-        lambda self: CurrentQuote(
-            symbol="XAUUSD",
-            current_price=2058.0,
-            data_source="TradingView",
-            data_timestamp=datetime.now(UTC),
-        ),
-    )
-    monkeypatch.setattr(
-        OpenAIAgentClient,
-        "invoke_agent",
-        lambda self, agent_name, payload: (_ for _ in ()).throw(OpenAIClientError(f"{agent_name} failed")),
-    )
-    settings = GoldFXGraphSettings(
-        xauusd_csv_path=tmp_path / "unused.csv",
-        openai_base_url="https://agent.example.test/v1",
-        openai_model="gpt-4.1-mini",
-        openai_api_key=SecretStr("agent-key"),
-    )
-    client = TestClient(create_app(testing=True, settings=settings, repository=cast(ForecastRepository, repository)))
-
-    response = client.post("/api/v1/research-runs")
-
-    assert response.status_code == 200
-    assert response.json()["forecast"]["data_source"] == "TradingView"
-    notes = response.json()["forecast"]["risk_notes"]
-    assert any("OpenAI-compatible technical agent 调用失败" in note for note in notes)
-    assert any("OpenAI-compatible macro agent 调用失败" in note for note in notes)
-
-
-def test_create_research_run_uses_cached_langgraph_workflow(monkeypatch: Any) -> None:
-    repository = InMemoryForecastRepository()
-    compile_count = 0
-    invoke_count = 0
-
-    class FakeCompiledGraph:
-        async def ainvoke(self, state: dict[str, Any]) -> dict[str, Any]:
-            nonlocal invoke_count
-            invoke_count += 1
-            forecast = _forecast()
-            saved = await state["repository"].save_forecast(state["run_id"], forecast)
-            await state["repository"].mark_run_success(state["run_id"])
-            return {**state, "result": saved, "forecast": saved}
-
-    class FakeGraph:
-        def compile(self) -> FakeCompiledGraph:
-            nonlocal compile_count
-            compile_count += 1
-            return FakeCompiledGraph()
-
-    monkeypatch.setattr(routes, "build_forecast_graph", lambda: FakeGraph())
-    client = TestClient(create_app(testing=True, repository=cast(ForecastRepository, repository)))
-
-    response = client.post("/api/v1/research-runs")
-    second_response = client.post("/api/v1/research-runs")
-
-    assert response.status_code == 200
-    assert second_response.status_code == 200
-    assert compile_count == 1
-    assert invoke_count == 2
-    assert response.json()["status"] == "success"
-    assert response.json()["forecast"]["direction"] == "bullish"
-
-
-def test_invalid_workflow_terminal_state_marks_run_failed(monkeypatch: Any) -> None:
-    repository = InMemoryForecastRepository()
-
-    class FakeCompiledGraph:
-        async def ainvoke(self, state: dict[str, Any]) -> dict[str, Any]:
-            return {**state, "result": None, "forecast": None}
-
-    class FakeGraph:
-        def compile(self) -> FakeCompiledGraph:
-            return FakeCompiledGraph()
-
-    monkeypatch.setattr(routes, "build_forecast_graph", lambda: FakeGraph())
-    client = TestClient(create_app(testing=True, repository=cast(ForecastRepository, repository)))
-
-    response = client.post("/api/v1/research-runs")
-
-    assert response.status_code == 502
-    assert response.json()["error"]["type"] == "workflow_error"
-    assert repository.runs[1].status == "failed"
-    assert repository.runs[1].error_message == "Workflow did not produce a forecast result"
-
-
-def test_configured_quote_provider_failure_records_sanitized_error(tmp_path: Path) -> None:
-    repository = InMemoryForecastRepository()
-    _seed_market_data(repository)
-    async def fake_backfill(**kwargs: Any) -> Any:
-        return type("BackfillResult", (), {"status": "no-op", "failure_reason": None})()
-
-    original_backfill = nodes.run_eod_backfill
-    nodes.run_eod_backfill = fake_backfill
-    settings = GoldFXGraphSettings(
-        xauusd_csv_path=tmp_path / "unused.csv",
-        current_quote_url="not-a-valid-url",
-    )
-    original_fetch = nodes.CurrentQuoteProvider.fetch
-
-    def failing_fetch(self: Any) -> Any:
-        raise QuoteProviderError("Current quote discovery failed")
-
-    nodes.CurrentQuoteProvider.fetch = failing_fetch
-    client = TestClient(create_app(testing=True, settings=settings, repository=cast(ForecastRepository, repository)))
-
-    try:
-        response = client.post("/api/v1/research-runs")
-    finally:
-        nodes.CurrentQuoteProvider.fetch = original_fetch
-        nodes.run_eod_backfill = original_backfill
-
-    assert response.status_code == 503
-    assert response.json()["error"]["type"] == "quote_provider_error"
-    assert repository.runs[1].status == "failed"
-    assert repository.runs[1].error_message == "Current quote discovery failed"
-    assert "quote-secret" not in response.text
-    assert "quote-secret" not in str(repository.runs[1].error_message)
+    assert response.status_code in {404, 405}
 
 
 def test_get_research_run_returns_structured_404_for_missing_run() -> None:
@@ -472,6 +362,15 @@ def _forecast() -> ForecastResult:
         daily_low=2030,
         daily_close=2048,
         direction=ForecastDirection.bullish,
+        window_directions=[
+            ForecastWindowDirection(
+                window_label="0-3天",
+                direction=ForecastDirection.bullish,
+                strength="moderate",
+                confidence=0.65,
+                reason="短期动量延续",
+            )
+        ],
         entry_price=2050.25,
         take_profit_price=2080,
         stop_loss_price=2035,

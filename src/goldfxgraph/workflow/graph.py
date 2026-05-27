@@ -21,6 +21,7 @@ from goldfxgraph.workflow.nodes import (
     tool_fetch_market_sentiment_inputs,
     tool_fetch_newsflow_inputs,
     tool_fetch_pizza_index_inputs,
+    tool_fetch_polymarket_inputs,
     tool_load_forecast_feedback_history,
     tool_load_market_data,
     tool_persist_forecast,
@@ -38,6 +39,7 @@ REQUIRED_NODE_NAMES = (
     "agent_macro_analysis",
     "tool_fetch_newsflow_inputs",
     "tool_fetch_pizza_index_inputs",
+    "tool_fetch_polymarket_inputs",
     "agent_news_analysis",
     "tool_load_forecast_feedback_history",
     "tool_fetch_market_sentiment_inputs",
@@ -64,6 +66,7 @@ def build_forecast_graph() -> StateGraph[WorkflowState]:
     graph.add_node("agent_macro_analysis", agent_macro_analysis)
     graph.add_node("tool_fetch_newsflow_inputs", tool_fetch_newsflow_inputs)
     graph.add_node("tool_fetch_pizza_index_inputs", tool_fetch_pizza_index_inputs)
+    graph.add_node("tool_fetch_polymarket_inputs", tool_fetch_polymarket_inputs)
     graph.add_node("agent_news_analysis", agent_news_analysis)
     graph.add_node("tool_load_forecast_feedback_history", tool_load_forecast_feedback_history)
     graph.add_node("tool_fetch_market_sentiment_inputs", tool_fetch_market_sentiment_inputs)
@@ -88,7 +91,8 @@ def build_forecast_graph() -> StateGraph[WorkflowState]:
     graph.add_edge("tool_fetch_newsflow_inputs", "agent_news_analysis")
     graph.add_edge("agent_news_analysis", "tool_fetch_pizza_index_inputs")
     graph.add_edge("tool_fetch_pizza_index_inputs", "tool_load_forecast_feedback_history")
-    graph.add_edge("tool_load_forecast_feedback_history", "tool_fetch_market_sentiment_inputs")
+    graph.add_edge("tool_load_forecast_feedback_history", "tool_fetch_polymarket_inputs")
+    graph.add_edge("tool_fetch_polymarket_inputs", "tool_fetch_market_sentiment_inputs")
     graph.add_edge("tool_fetch_market_sentiment_inputs", "tool_fetch_alt_data_inputs")
     graph.add_edge("tool_fetch_alt_data_inputs", "agent_market_sentiment_analysis")
     graph.add_edge("agent_market_sentiment_analysis", "agent_alt_data_analysis")

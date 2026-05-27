@@ -50,6 +50,10 @@ class OpenAIAgentClient:
                         f"{agent_name}。请只返回一个 JSON object，"
                         "字段必须包含 summary、direction、confidence、risk_notes。"
                         "所有自然语言字段必须使用简体中文，"
+                        "如果 payload 中存在 title_cn、source_cn、summary_cn 等中文翻译字段，必须优先使用，"
+                        "尤其在 news 与 market_sentiment 场景中不得直接输出英文新闻标题或英文市场标题作为摘要主体，"
+                        "如果 payload 中包含 newsflow_inputs 或 polymarket_inputs，请优先引用其中的中文标题、"
+                        "中文来源与中文摘要，"
                         "direction 只能使用 bullish、bearish、neutral。"
                         "risk_notes 必须是字符串数组。"
                     ),
@@ -67,7 +71,7 @@ class OpenAIAgentClient:
                 },
             ],
         }
-        client_kwargs: dict[str, Any] = {"timeout": 10}
+        client_kwargs: dict[str, Any] = {"timeout": 20}
         if self._transport is not None:
             client_kwargs["transport"] = self._transport
 
@@ -88,7 +92,8 @@ class OpenAIAgentClient:
                 f"OpenAI-compatible request failed for {agent_name} with HTTP {exc.response.status_code}{suffix}"
             ) from exc
         except httpx.HTTPError as exc:
-            raise OpenAIClientError(f"OpenAI-compatible request failed for {agent_name}") from exc
+            detail = _format_exception_chain(exc)
+            raise OpenAIClientError(f"OpenAI-compatible request failed for {agent_name}: {detail}") from exc
         except JSONDecodeError as exc:
             raise OpenAIClientError(f"OpenAI-compatible response returned invalid JSON for {agent_name}") from exc
 
@@ -163,3 +168,18 @@ class OpenAIAgentClient:
                 normalized["direction"] = "neutral"
 
         return normalized
+
+
+def _format_exception_chain(exc: BaseException) -> str:
+    parts: list[str] = []
+    current: BaseException | None = exc
+    while current is not None:
+        label = type(current).__name__
+        message = str(current).strip()
+        if message:
+            parts.append(f"{label}: {message}")
+        else:
+            parts.append(label)
+        current = current.__cause__ if isinstance(current.__cause__, BaseException) else None
+
+    return " | ".join(parts)

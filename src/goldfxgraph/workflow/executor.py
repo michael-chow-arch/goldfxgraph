@@ -15,6 +15,7 @@ async def run_forecast_workflow(
     settings: GoldFXGraphSettings,
     repository: ForecastRepository,
     run_id: int,
+    scheduler_run_id: int | None = None,
     agent_http_transport: httpx.BaseTransport | None = None,
     signal_http_transport: httpx.BaseTransport | None = None,
     quote_provider: Any | None = None,
@@ -24,6 +25,8 @@ async def run_forecast_workflow(
         repository=repository,
         run_id=run_id,
     )
+    if scheduler_run_id is not None:
+        state["scheduler_run_id"] = scheduler_run_id
     if agent_http_transport is not None:
         state["agent_http_transport"] = agent_http_transport
     if signal_http_transport is not None:

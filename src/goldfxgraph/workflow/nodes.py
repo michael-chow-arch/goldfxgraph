@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 from datetime import UTC, date, datetime
 from typing import Any, Protocol, TypedDict
 
@@ -22,6 +24,7 @@ from goldfxgraph.market_data.newsflow import (
     translate_source_name_to_chinese,
 )
 from goldfxgraph.market_data.pizza_index import PizzaIndexError, fetch_pizza_index
+from goldfxgraph.market_data.polymarket import PolymarketError, fetch_polymarket_inputs
 from goldfxgraph.market_data.tradingview_quote import DEFAULT_TRADINGVIEW_SOURCE
 from goldfxgraph.packages.common.settings import GoldFXGraphSettings, get_settings
 from goldfxgraph.persistence.repositories import ForecastRepository
@@ -32,9 +35,12 @@ from goldfxgraph.schemas.forecast import (
     ForecastDirection,
     ForecastEvaluationResult,
     ForecastResult,
+    ForecastWindowDirection,
     MarketDataSet,
     TechnicalIndicators,
 )
+
+logger = logging.getLogger(__name__)
 
 run_eod_backfill = None
 
@@ -53,6 +59,7 @@ class WorkflowState(TypedDict, total=False):
     agent_http_transport: httpx.BaseTransport
     signal_http_transport: httpx.BaseTransport
     repository: ForecastRepository
+    scheduler_run_id: int
     market_data: MarketDataSet
     bars: list[DailyBar]
     latest_bar: DailyBar
@@ -66,9 +73,11 @@ class WorkflowState(TypedDict, total=False):
     alt_data_summary: str
     newsflow_inputs: dict[str, object]
     pizza_index_inputs: dict[str, object]
+    polymarket_inputs: dict[str, object]
     risk_summary: str
     agent_votes: list[AgentVote]
     risk_notes: list[str]
+    agent_diagnostics: list[dict[str, Any]]
     forecast_feedback_history: list[str]
     market_sentiment_inputs: dict[str, object]
     alt_data_inputs: dict[str, object]
@@ -84,6 +93,15 @@ class WorkflowState(TypedDict, total=False):
 
 
 RESEARCH_DISCLAIMER = "本结果仅用于研究和决策支持，不构成金融建议、投资建议或交易指令。"
+SCHEDULER_AGENT_NAMES = (
+    "technical",
+    "macro",
+    "news",
+    "market_sentiment",
+    "alt_data",
+    "risk",
+    "forecast",
+)
 
 
 class AgentApiResponse(BaseModel):
@@ -91,6 +109,43 @@ class AgentApiResponse(BaseModel):
     direction: ForecastDirection
     confidence: float = Field(ge=0, le=1)
     risk_notes: list[str] = Field(default_factory=list)
+
+
+def _schedule_scheduler_status_update(
+    state: WorkflowState,
+    *,
+    current_stage: str,
+    active_agent: str | None = None,
+    status: str = "running",
+    last_error: str | None = None,
+) -> None:
+    repository = state.get("repository")
+    scheduler_run_id = state.get("scheduler_run_id")
+    if repository is None or scheduler_run_id is None:
+        return
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return
+
+    agent_statuses = []
+    for agent_name in SCHEDULER_AGENT_NAMES:
+        if active_agent is not None and agent_name == active_agent:
+            agent_statuses.append({"agent": agent_name, "status": status})
+        else:
+            agent_statuses.append({"agent": agent_name, "status": "pending"})
+
+    asyncio.create_task(
+        repository.update_scheduler_run_stage(
+            scheduler_run_id,
+            current_stage=current_stage,
+            agent_statuses=agent_statuses,
+            agent_diagnostics=list(state.get("agent_diagnostics") or []),
+            status="running",
+            last_error=last_error,
+        )
+    )
 
 
 def evaluate_forecast_performance(
@@ -156,7 +211,9 @@ def evaluate_forecast_performance(
         },
     )
 
+
 async def tool_load_forecast_feedback_history(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(state, current_stage="tool_load_forecast_feedback_history")
     repository = state.get("repository")
     if repository is None:
         return {**state, "forecast_feedback_history": []}
@@ -167,6 +224,7 @@ async def tool_load_forecast_feedback_history(state: WorkflowState) -> WorkflowS
 
 
 def tool_fetch_market_sentiment_inputs(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(state, current_stage="tool_fetch_market_sentiment_inputs")
     latest_bar = _required(state, "latest_bar")
     quote = _required(state, "quote")
     indicators = _required(state, "indicators")
@@ -176,11 +234,14 @@ def tool_fetch_market_sentiment_inputs(state: WorkflowState) -> WorkflowState:
     trend_bias = _direction_from_inputs(quote.current_price, latest_bar, indicators)
     cftc_commitments, _ = _fetch_cftc_commitments(signal_transport)
     newsflow_inputs = state.get("newsflow_inputs") or {}
+    polymarket_inputs = state.get("polymarket_inputs") or {}
     unavailable_signals = list(state.get("unavailable_signals") or [])
     if newsflow_inputs.get("status") != "available":
         unavailable_signals.append("newsflow")
     if cftc_commitments.get("status") != "available":
         unavailable_signals.extend(["positioning", "cftc_commitments"])
+    if polymarket_inputs.get("status") != "available":
+        unavailable_signals.append("polymarket")
     unavailable_signals = _unique_strings([str(item) for item in unavailable_signals])
     available_signals = [
         "price_action",
@@ -191,6 +252,8 @@ def tool_fetch_market_sentiment_inputs(state: WorkflowState) -> WorkflowState:
         available_signals.extend(["cftc_commitments", "positioning"])
     if newsflow_inputs.get("status") == "available":
         available_signals.append("newsflow")
+    if polymarket_inputs.get("status") == "available":
+        available_signals.append("polymarket")
     inputs = {
         "trend_bias": trend_bias.value,
         "current_price": round(quote.current_price, 4),
@@ -203,6 +266,13 @@ def tool_fetch_market_sentiment_inputs(state: WorkflowState) -> WorkflowState:
         "newsflow_headline_count": int(newsflow_inputs.get("headline_count") or 0),
         "newsflow_sentiment": newsflow_inputs.get("sentiment"),
         "newsflow_topics": list(newsflow_inputs.get("topics") or []),
+        "polymarket_market_count": int(polymarket_inputs.get("market_count") or 0),
+        "polymarket_gold_related_market_count": int(polymarket_inputs.get("gold_related_market_count") or 0),
+        "polymarket_bullish_count": int(polymarket_inputs.get("bullish_count") or 0),
+        "polymarket_bearish_count": int(polymarket_inputs.get("bearish_count") or 0),
+        "polymarket_neutral_count": int(polymarket_inputs.get("neutral_count") or 0),
+        "polymarket_markets": list(polymarket_inputs.get("markets") or []),
+        "polymarket_summary": polymarket_inputs.get("summary"),
         "available_signals": available_signals,
         "unavailable_signals": unavailable_signals,
     }
@@ -214,6 +284,7 @@ def tool_fetch_market_sentiment_inputs(state: WorkflowState) -> WorkflowState:
 
 
 def tool_fetch_alt_data_inputs(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(state, current_stage="tool_fetch_alt_data_inputs")
     latest_bar = _required(state, "latest_bar")
     quote = _required(state, "quote")
     signal_transport = state.get("signal_http_transport")
@@ -263,6 +334,7 @@ def tool_fetch_alt_data_inputs(state: WorkflowState) -> WorkflowState:
 
 
 def tool_fetch_newsflow_inputs(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(state, current_stage="tool_fetch_newsflow_inputs")
     signal_transport = state.get("signal_http_transport")
     try:
         newsflow_inputs = fetch_newsflow(signal_transport)
@@ -293,6 +365,7 @@ def tool_fetch_newsflow_inputs(state: WorkflowState) -> WorkflowState:
 
 
 def tool_fetch_pizza_index_inputs(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(state, current_stage="tool_fetch_pizza_index_inputs")
     signal_transport = state.get("signal_http_transport")
     try:
         pizza_index_inputs = fetch_pizza_index(signal_transport)
@@ -325,10 +398,55 @@ def tool_fetch_pizza_index_inputs(state: WorkflowState) -> WorkflowState:
     }
 
 
+def tool_fetch_polymarket_inputs(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(state, current_stage="tool_fetch_polymarket_inputs")
+    signal_transport = state.get("signal_http_transport")
+    try:
+        polymarket_inputs = fetch_polymarket_inputs(signal_transport)
+    except (PolymarketError, httpx.HTTPError, ValueError, TypeError) as exc:
+        polymarket_inputs = {
+            "status": "unavailable",
+            "source": "polymarket.com",
+            "url": "https://polymarket.com/zh",
+            "market_count": 0,
+            "gold_related_market_count": 0,
+            "bullish_count": 0,
+            "bearish_count": 0,
+            "neutral_count": 0,
+            "markets": [],
+            "summary": "Polymarket 公开页暂不可用，当前没有抓取到可验证的黄金相关市场。",
+            "error": str(exc),
+        }
+
+    unavailable_signals = list(state.get("unavailable_signals") or [])
+    if polymarket_inputs.get("status") != "available":
+        unavailable_signals.append("polymarket")
+    unavailable_signals = _unique_strings([str(item) for item in unavailable_signals])
+    return {
+        **state,
+        "polymarket_inputs": polymarket_inputs,
+        "unavailable_signals": unavailable_signals,
+    }
+
+
 def agent_market_sentiment_analysis(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(
+        state,
+        current_stage="agent_market_sentiment_analysis",
+        active_agent="market_sentiment",
+    )
     inputs = state.get("market_sentiment_inputs", {})
-    remote, diagnostic = _remote_agent_response(state, "market_sentiment")
-    summary = _summary_or_fallback(remote.summary if remote else None, _market_sentiment_summary(inputs))
+    remote, _diagnostic, diagnostic_record = _remote_agent_response(
+        state,
+        "market_sentiment",
+        "agent_market_sentiment_analysis",
+    )
+    state = _append_agent_diagnostic(state, diagnostic_record)
+    fallback_summary = _market_sentiment_summary(inputs)
+    summary = _summary_or_fallback(remote.summary if remote else None, fallback_summary)
+    polymarket_summary = str(inputs.get("polymarket_summary") or "").strip()
+    if "Polymarket" not in summary and polymarket_summary:
+        summary = _append_summary_section(summary, "重点·Polymarket", polymarket_summary)
     direction = remote.direction if remote else _market_sentiment_direction(inputs)
     confidence = remote.confidence if remote else _market_sentiment_confidence(inputs, direction)
     vote = AgentVote(
@@ -341,14 +459,19 @@ def agent_market_sentiment_analysis(state: WorkflowState) -> WorkflowState:
         **state,
         "market_sentiment_summary": summary,
         "market_sentiment_votes": [vote],
-        "risk_notes": _append_note(state.get("risk_notes"), diagnostic),
         "agent_votes": [*_existing_votes_without(state, "market_sentiment"), vote],
     }
 
 
 def agent_alt_data_analysis(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(
+        state,
+        current_stage="agent_alt_data_analysis",
+        active_agent="alt_data",
+    )
     inputs = state.get("alt_data_inputs", {})
-    remote, diagnostic = _remote_agent_response(state, "alt_data")
+    remote, _diagnostic, diagnostic_record = _remote_agent_response(state, "alt_data", "agent_alt_data_analysis")
+    state = _append_agent_diagnostic(state, diagnostic_record)
     summary = _summary_or_fallback(remote.summary if remote else None, _alt_data_summary(inputs))
     direction = remote.direction if remote else ForecastDirection.neutral
     confidence = remote.confidence if remote else 0.3
@@ -362,7 +485,6 @@ def agent_alt_data_analysis(state: WorkflowState) -> WorkflowState:
         **state,
         "alt_data_summary": summary,
         "alt_data_votes": [vote],
-        "risk_notes": _append_note(state.get("risk_notes"), diagnostic),
         "agent_votes": [*_existing_votes_without(state, "alt_data"), vote],
     }
 
@@ -425,7 +547,17 @@ def create_research_forecast_from_inputs(
     atr = _usable_atr(indicators, latest_bar, price)
     direction = _direction_from_inputs(price, latest_bar, indicators)
     entry_price, take_profit_price, stop_loss_price = _research_levels(price, atr, direction)
-    technical_summary = _technical_summary(price, latest_bar, indicators, direction)
+    entry_price_low = None
+    entry_price_high = None
+    if direction == ForecastDirection.neutral:
+        entry_price_low, entry_price_high = _neutral_entry_range(price, atr, latest_bar)
+        entry_price = round((entry_price_low + entry_price_high) / 2, 2)
+    technical_summary = _technical_summary(price, latest_bar, indicators, direction, atr)
+    technical_summary = _append_summary_section(
+        technical_summary,
+        "技术分析·聪明钱",
+        _smart_money_summary(price, latest_bar, indicators, direction, atr),
+    )
     macro_summary = _macro_summary(
         {
             "current_price": round(price, 4),
@@ -447,7 +579,7 @@ def create_research_forecast_from_inputs(
         "- 本轮仅用于风险提示，不作为方向依据。"
     )
     risk_notes = _risk_notes(latest_bar, indicators, atr)
-    risk_summary = "风险评估基于 ATR、日内区间和指标可用性生成，建议仅作为研究参考并控制仓位暴露。"
+    risk_summary = "风险评估基于 ATR、最新日线振幅、RSI 和关键价格边界生成，最新K线只用于判断波动边界，不作为复盘结论。"
     agent_votes = [
         AgentVote(
             agent="technical",
@@ -498,11 +630,21 @@ def create_research_forecast_from_inputs(
         daily_low=latest_bar.low,
         daily_close=latest_bar.close,
         direction=direction,
+        window_directions=_forecast_window_directions(direction, _combined_confidence(agent_votes, indicators)),
         entry_price=entry_price,
+        entry_price_low=entry_price_low,
+        entry_price_high=entry_price_high,
         take_profit_price=take_profit_price,
         stop_loss_price=stop_loss_price,
         holding_period=_holding_period(direction, atr, price),
-        intraday_action=_intraday_action(direction, entry_price, take_profit_price, stop_loss_price),
+        intraday_action=_intraday_action(
+            direction,
+            entry_price,
+            take_profit_price,
+            stop_loss_price,
+            entry_price_low,
+            entry_price_high,
+        ),
         long_term_action=_long_term_action(direction),
         confidence_score=_combined_confidence(agent_votes, indicators),
         technical_summary=technical_summary,
@@ -517,13 +659,53 @@ def create_research_forecast_from_inputs(
     )
 
 
+def _forecast_window_directions(
+    direction: ForecastDirection,
+    confidence_score: float,
+) -> list[ForecastWindowDirection]:
+    middle_direction = direction if direction != ForecastDirection.neutral else ForecastDirection.neutral
+    future_direction = ForecastDirection.neutral if direction == ForecastDirection.neutral else direction
+    return [
+        ForecastWindowDirection(
+            window_label="0-3天",
+            direction=direction,
+            strength="strong" if confidence_score >= 0.7 else "moderate",
+            confidence=round(min(confidence_score + 0.04, 0.99), 2),
+            reason="短期仍以当前价格结构与动量节奏为主。",
+        ),
+        ForecastWindowDirection(
+            window_label="3-5天",
+            direction=middle_direction,
+            strength="moderate" if confidence_score >= 0.55 else "mild",
+            confidence=round(max(min(confidence_score - 0.02, 0.95), 0.35), 2),
+            reason="中短期继续观察回踩/反弹后的延续性。",
+        ),
+        ForecastWindowDirection(
+            window_label="6-15天",
+            direction=middle_direction,
+            strength="mild",
+            confidence=round(max(min(confidence_score - 0.08, 0.9), 0.3), 2),
+            reason="中期方向可能延续，但波动和事件风险会抬升。",
+        ),
+        ForecastWindowDirection(
+            window_label="15天后",
+            direction=future_direction,
+            strength="mild",
+            confidence=round(max(min(confidence_score - 0.12, 0.85), 0.25), 2),
+            reason="更远期更容易进入震荡或重新定价阶段。",
+        ),
+    ]
+
+
 def router_validate_request(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(state, current_stage="router_validate_request")
     if "errors" in state and state["errors"]:
         raise ValueError("; ".join(state["errors"]))
     return state
 
 
 async def tool_load_market_data(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(state, current_stage="tool_load_market_data")
     if "market_data" in state and "latest_bar" in state and "bars" in state:
         return state
 
@@ -549,6 +731,7 @@ async def tool_load_market_data(state: WorkflowState) -> WorkflowState:
 
 
 async def tool_ensure_market_data_freshness(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(state, current_stage="tool_ensure_market_data_freshness")
     repository = state.get("repository")
     if repository is None:
         raise ValueError("workflow state missing repository for market data freshness preflight")
@@ -571,6 +754,7 @@ async def tool_ensure_market_data_freshness(state: WorkflowState) -> WorkflowSta
 
 
 def tool_fetch_current_gold_quote(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(state, current_stage="tool_fetch_current_gold_quote")
     if "quote" in state:
         return state
 
@@ -595,6 +779,7 @@ def _require_tradingview_quote(quote: CurrentQuote) -> CurrentQuote:
 
 
 def tool_compute_indicators(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(state, current_stage="tool_compute_indicators")
     if "indicators" in state:
         return state
 
@@ -609,6 +794,7 @@ def tool_compute_indicators(state: WorkflowState) -> WorkflowState:
 
 
 def tool_fetch_macro_inputs(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(state, current_stage="tool_fetch_macro_inputs")
     latest_bar = _required(state, "latest_bar")
     quote = _required(state, "quote")
     indicators = _required(state, "indicators")
@@ -644,31 +830,53 @@ def tool_fetch_macro_inputs(state: WorkflowState) -> WorkflowState:
 
 
 def agent_technical_analysis(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(
+        state,
+        current_stage="agent_technical_analysis",
+        active_agent="technical",
+    )
     latest_bar = _required(state, "latest_bar")
     quote = _required(state, "quote")
     indicators = _required(state, "indicators")
-    remote, diagnostic = _remote_agent_response(state, "technical")
+    remote, _diagnostic, diagnostic_record = _remote_agent_response(
+        state,
+        "technical",
+        "agent_technical_analysis",
+    )
+    state = _append_agent_diagnostic(state, diagnostic_record)
     direction = remote.direction if remote else _direction_from_inputs(quote.current_price, latest_bar, indicators)
+    atr = _usable_atr(indicators, latest_bar, quote.current_price)
+    summary = _summary_or_fallback(
+        remote.summary if remote else None,
+        _technical_summary(quote.current_price, latest_bar, indicators, direction, atr),
+    )
+    summary = _append_summary_section(
+        summary,
+        "技术分析·聪明钱",
+        _smart_money_summary(quote.current_price, latest_bar, indicators, direction, atr),
+    )
     vote = AgentVote(
         agent="technical",
         direction=direction,
         confidence=remote.confidence if remote else _technical_confidence(indicators, direction),
-        rationale=_summary_or_fallback(
-            remote.summary if remote else None,
-            _technical_summary(quote.current_price, latest_bar, indicators, direction),
-        ),
+        rationale=summary,
     )
     return {
         **state,
-        "technical_summary": vote.rationale,
-        "risk_notes": _append_note(state.get("risk_notes"), diagnostic),
+        "technical_summary": summary,
         "agent_votes": [*_existing_votes_without(state, "technical"), vote],
     }
 
 
 def agent_macro_analysis(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(
+        state,
+        current_stage="agent_macro_analysis",
+        active_agent="macro",
+    )
     inputs = state.get("macro_inputs", {})
-    remote, diagnostic = _remote_agent_response(state, "macro")
+    remote, _diagnostic, diagnostic_record = _remote_agent_response(state, "macro", "agent_macro_analysis")
+    state = _append_agent_diagnostic(state, diagnostic_record)
     summary = _summary_or_fallback(
         remote.summary if remote else None,
         _macro_summary(inputs),
@@ -682,15 +890,23 @@ def agent_macro_analysis(state: WorkflowState) -> WorkflowState:
     return {
         **state,
         "macro_summary": summary,
-        "risk_notes": _append_note(state.get("risk_notes"), diagnostic),
         "agent_votes": [*_existing_votes_without(state, "macro"), vote],
     }
 
 
 def agent_news_analysis(state: WorkflowState) -> WorkflowState:
-    remote, diagnostic = _remote_agent_response(state, "news")
+    _schedule_scheduler_status_update(
+        state,
+        current_stage="agent_news_analysis",
+        active_agent="news",
+    )
+    remote, _diagnostic, diagnostic_record = _remote_agent_response(state, "news", "agent_news_analysis")
+    state = _append_agent_diagnostic(state, diagnostic_record)
     inputs = state.get("newsflow_inputs", {})
-    summary = _summary_or_fallback(remote.summary if remote else None, _news_summary(inputs))
+    fallback_summary = _news_summary(inputs)
+    summary = _summary_or_fallback(remote.summary if remote else None, fallback_summary)
+    if "代表性标题" not in summary and fallback_summary:
+        summary = _append_summary_section(summary, "重点·参考新闻", fallback_summary)
     vote = AgentVote(
         agent="news",
         direction=remote.direction if remote else ForecastDirection.neutral,
@@ -700,22 +916,26 @@ def agent_news_analysis(state: WorkflowState) -> WorkflowState:
     return {
         **state,
         "news_summary": summary,
-        "risk_notes": _append_note(state.get("risk_notes"), diagnostic),
         "agent_votes": [*_existing_votes_without(state, "news"), vote],
     }
 
 
 def agent_risk_analysis(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(
+        state,
+        current_stage="agent_risk_analysis",
+        active_agent="risk",
+    )
     latest_bar = _required(state, "latest_bar")
     quote = _required(state, "quote")
     indicators = _required(state, "indicators")
     atr = _usable_atr(indicators, latest_bar, quote.current_price)
-    remote, diagnostic = _remote_agent_response(state, "risk")
+    remote, _diagnostic, diagnostic_record = _remote_agent_response(state, "risk", "agent_risk_analysis")
+    state = _append_agent_diagnostic(state, diagnostic_record)
     notes = _merge_notes(
         state.get("risk_notes"),
         remote.risk_notes if remote and remote.risk_notes else _risk_notes(latest_bar, indicators, atr),
     )
-    notes = _append_note(notes, diagnostic)
     summary = (
         remote.summary if remote else "风险 agent 基于 ATR、日线区间与指标缺失情况生成结构化提示，不触发任何交易执行。"
     )
@@ -740,6 +960,11 @@ def agent_risk_analysis(state: WorkflowState) -> WorkflowState:
 
 
 def agent_forecast_planning(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(
+        state,
+        current_stage="agent_forecast_planning",
+        active_agent="forecast",
+    )
     latest_bar = _required(state, "latest_bar")
     quote = _required(state, "quote")
     indicators = _required(state, "indicators")
@@ -754,13 +979,27 @@ def agent_forecast_planning(state: WorkflowState) -> WorkflowState:
         direction, confidence_score = _aggregate_agent_votes(agent_votes)
         atr = _usable_atr(indicators, latest_bar, quote.current_price)
         entry_price, take_profit_price, stop_loss_price = _research_levels(quote.current_price, atr, direction)
+        entry_price_low = None
+        entry_price_high = None
+        if direction == ForecastDirection.neutral:
+            entry_price_low, entry_price_high = _neutral_entry_range(quote.current_price, atr, latest_bar)
+            entry_price = round((entry_price_low + entry_price_high) / 2, 2)
         forecast.direction = direction
         forecast.confidence_score = confidence_score
         forecast.entry_price = entry_price
+        forecast.entry_price_low = entry_price_low
+        forecast.entry_price_high = entry_price_high
         forecast.take_profit_price = take_profit_price
         forecast.stop_loss_price = stop_loss_price
         forecast.holding_period = _holding_period(direction, atr, quote.current_price)
-        forecast.intraday_action = _intraday_action(direction, entry_price, take_profit_price, stop_loss_price)
+        forecast.intraday_action = _intraday_action(
+            direction,
+            entry_price,
+            take_profit_price,
+            stop_loss_price,
+            entry_price_low,
+            entry_price_high,
+        )
         forecast.long_term_action = _long_term_action(direction)
         forecast.agent_votes = agent_votes
     if "technical_summary" in state:
@@ -787,11 +1026,13 @@ def agent_forecast_planning(state: WorkflowState) -> WorkflowState:
         unavailable_note = "不可用信号：" + "、".join(unavailable_items)
         forecast.risk_notes = _append_note(forecast.risk_notes, unavailable_note)
         forecast.risk_summary = f"{forecast.risk_summary} {unavailable_note}"
+    forecast.window_directions = _forecast_window_directions(forecast.direction, forecast.confidence_score)
 
     return {**state, "forecast": forecast}
 
 
 async def tool_persist_research_run(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(state, current_stage="tool_persist_research_run")
     repository = state.get("repository")
     if repository is None:
         return {**state, "persistence_status": "skipped: repository not provided"}
@@ -803,6 +1044,7 @@ async def tool_persist_research_run(state: WorkflowState) -> WorkflowState:
 
 
 async def tool_persist_forecast(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(state, current_stage="tool_persist_forecast")
     repository = state.get("repository")
     if repository is None:
         return {**state, "persistence_status": "skipped: repository not provided"}
@@ -824,6 +1066,7 @@ async def tool_persist_forecast(state: WorkflowState) -> WorkflowState:
 
 
 def router_finalize_result(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(state, current_stage="router_finalize_result")
     forecast = state.get("forecast")
     if forecast is None:
         raise ValueError("workflow state missing forecast result")
@@ -880,6 +1123,16 @@ def _research_levels(price: float, atr: float, direction: ForecastDirection) -> 
     return entry, round(take_profit, 2), round(stop_loss, 2)
 
 
+def _neutral_entry_range(price: float, atr: float, latest_bar: DailyBar) -> tuple[float, float]:
+    half_band = max(atr * 0.45, price * 0.003)
+    lower = max(latest_bar.low, price - half_band)
+    upper = min(latest_bar.high, price + half_band)
+    if lower >= upper:
+        lower = max(price - half_band, price * 0.5)
+        upper = price + half_band
+    return round(lower, 2), round(upper, 2)
+
+
 def _usable_atr(indicators: TechnicalIndicators, latest_bar: DailyBar, price: float) -> float:
     if indicators.atr_14 is not None and indicators.atr_14 > 0:
         return indicators.atr_14
@@ -891,6 +1144,7 @@ def _technical_summary(
     latest_bar: DailyBar,
     indicators: TechnicalIndicators,
     direction: ForecastDirection,
+    atr: float,
 ) -> str:
     direction_text = {
         ForecastDirection.bullish: "看多",
@@ -906,13 +1160,56 @@ def _technical_summary(
         parts.append(f"EMA-12 为 {indicators.ema_12:.2f}。")
     if indicators.rsi_14 is not None:
         parts.append(f"RSI-14 为 {indicators.rsi_14:.2f}。")
+    near_high = latest_bar.high - price
+    near_low = price - latest_bar.low
+    reversal_threshold = max(atr * 0.35, price * 0.002)
+    if 0 <= near_high <= reversal_threshold:
+        parts.append("价格接近日内上沿，若继续上探，容易进入短线止盈区并伴随反转或回落。")
+    elif 0 <= near_low <= reversal_threshold:
+        parts.append("价格接近日内下沿，若继续下探，容易进入短线止损区并伴随反抽或反转。")
     if indicators.unavailable:
         parts.append(f"部分指标不可用：{', '.join(sorted(indicators.unavailable))}。")
     return "".join(parts)
 
 
+def _smart_money_summary(
+    price: float,
+    latest_bar: DailyBar,
+    indicators: TechnicalIndicators,
+    direction: ForecastDirection,
+    atr: float,
+) -> str:
+    upper_buffer = max(atr * 0.25, price * 0.0015)
+    lower_buffer = upper_buffer
+    near_high = latest_bar.high - price
+    near_low = price - latest_bar.low
+    parts = ["聪明钱逻辑关注区间边缘的流动性扫单与反向止损触发。"]
+    if 0 <= near_high <= upper_buffer:
+        parts.append("价格接近日内上沿，若继续冲高，容易先扫掉上方止盈，再观察是否出现回落或假突破。")
+    elif 0 <= near_low <= lower_buffer:
+        parts.append("价格接近日内下沿，若继续下探，容易先扫掉下方止损，再观察是否出现反抽或假跌破。")
+    else:
+        parts.append("当前价格位于区间中段，更像是在等待上沿或下沿的流动性被测试。")
+
+    if direction == ForecastDirection.neutral:
+        parts.append(
+            f"震荡阶段更适合观察 {latest_bar.low:.2f} 到 {latest_bar.high:.2f} 的价格带，"
+            "高位偏空、低位偏多的区间思路优先于单点追价。"
+        )
+    elif direction == ForecastDirection.bullish:
+        parts.append("若突破前高并放量，则聪明钱更可能在回踩确认后继续推升。")
+    else:
+        parts.append("若跌破前低并放量，则聪明钱更可能在反抽确认后继续压低。")
+
+    if indicators.unavailable:
+        parts.append(f"该逻辑同时参考了未失效的指标，缺失项有：{', '.join(sorted(indicators.unavailable))}。")
+    return "".join(parts)
+
+
 def _risk_notes(latest_bar: DailyBar, indicators: TechnicalIndicators, atr: float) -> list[str]:
-    notes = [f"ATR 参考值约为 {atr:.2f}，止损和止盈仅用于研究情景测算。"]
+    notes = [
+        f"风险分析以 ATR 参考值约 {atr:.2f}、最新日线振幅和 RSI 状态为主，最新K线仅用于判断波动边界，不作为复盘结论。"
+    ]
     daily_range = latest_bar.high - latest_bar.low
     if daily_range > atr * 1.5:
         notes.append("最新日线振幅明显高于 ATR 参考，需警惕波动放大。")
@@ -976,6 +1273,8 @@ def _intraday_action(
     entry_price: float,
     take_profit_price: float,
     stop_loss_price: float,
+    entry_price_low: float | None = None,
+    entry_price_high: float | None = None,
 ) -> str:
     if direction == ForecastDirection.bullish:
         return (
@@ -986,6 +1285,11 @@ def _intraday_action(
         return (
             f"研究情景偏空：关注 {entry_price:.2f} 附近的反弹承压，"
             f"止盈参考 {take_profit_price:.2f}，止损参考 {stop_loss_price:.2f}。"
+        )
+    if entry_price_low is not None and entry_price_high is not None:
+        return (
+            f"研究情景中性：关注 {entry_price_low:.2f}-{entry_price_high:.2f} 的震荡区间，"
+            "高位更适合观察反弹后的做空机会，低位更适合观察回踩后的做多机会。"
         )
     return f"研究情景中性：关注 {entry_price:.2f} 附近区间反应，等待突破或跌破后再更新假设。"
 
@@ -1002,14 +1306,28 @@ def _existing_votes_without(state: WorkflowState, agent_name: str) -> list[Agent
     return [vote for vote in state.get("agent_votes", []) if vote.agent != agent_name]
 
 
-def _remote_agent_response(state: WorkflowState, agent_name: str) -> tuple[AgentApiResponse | None, str | None]:
+def _remote_agent_response(
+    state: WorkflowState,
+    agent_name: str,
+    stage: str,
+) -> tuple[AgentApiResponse | None, str | None, dict[str, Any] | None]:
     settings = state.get("settings") or get_settings()
     if not settings.openai_base_url or not settings.openai_model or not settings.openai_api_key:
+        message = (
+            f"OpenAI-compatible {agent_name} agent 未配置有效 base_url/model/API Key，"
+            "已回退到 deterministic workflow 输出。"
+        )
+        detail = _settings_snapshot_for_agent(settings)
+        logger.warning("%s detail=%s", message, detail)
         return (
             None,
-            (
-                f"OpenAI-compatible {agent_name} agent 未配置有效 base_url/model/API Key，"
-                "已回退到 deterministic workflow 输出。"
+            message,
+            _agent_diagnostic_record(
+                agent=agent_name,
+                stage=stage,
+                status="unconfigured",
+                message=message,
+                detail=detail,
             ),
         )
 
@@ -1023,15 +1341,76 @@ def _remote_agent_response(state: WorkflowState, agent_name: str) -> tuple[Agent
             api_key=settings.openai_api_key.get_secret_value(),
             transport=transport,
         ).invoke_agent(agent_name, payload)
-    except OpenAIClientError:
-        return None, f"OpenAI-compatible {agent_name} agent 调用失败，已回退到 deterministic workflow 输出。"
+    except OpenAIClientError as exc:
+        detail = str(exc).strip() or "agent call failed"
+        message = f"OpenAI-compatible {agent_name} agent 调用失败，已回退到 deterministic workflow 输出。"
+        logger.warning("%s detail=%s", message, detail)
+        return (
+            None,
+            message,
+            _agent_diagnostic_record(
+                agent=agent_name,
+                stage=stage,
+                status="failed",
+                message=message,
+                detail=detail,
+            ),
+        )
 
-    return AgentApiResponse.model_validate(result.model_dump()), None
+    return AgentApiResponse.model_validate(result.model_dump()), None, None
+
+
+def _settings_snapshot_for_agent(settings: GoldFXGraphSettings) -> str:
+    base_url = settings.openai_base_url or "unset"
+    model = settings.openai_model or "unset"
+    api_key = "set" if settings.openai_api_key is not None else "unset"
+    return f"base_url={base_url}; model={model}; api_key={api_key}"
+
+
+def _agent_diagnostic_record(
+    *,
+    agent: str,
+    stage: str,
+    status: str,
+    message: str,
+    detail: str | None = None,
+) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "agent": agent,
+        "stage": stage,
+        "status": status,
+        "message": message,
+    }
+    if detail:
+        record["detail"] = detail
+    return record
+
+
+def _append_agent_diagnostic(
+    state: WorkflowState,
+    diagnostic: dict[str, Any] | None,
+) -> WorkflowState:
+    if diagnostic is None:
+        return state
+
+    diagnostics = list(state.get("agent_diagnostics") or [])
+    diagnostics.append(diagnostic)
+    return {**state, "agent_diagnostics": diagnostics}
 
 
 def _summary_or_fallback(summary: str | None, fallback: str) -> str:
     cleaned = (summary or "").strip()
     return cleaned or fallback
+
+
+def _append_summary_section(summary: str, title: str, body: str | None) -> str:
+    cleaned_body = (body or "").strip()
+    if not cleaned_body or title in summary:
+        return summary
+    if not summary.strip():
+        return f"{title}：{cleaned_body}"
+    separator = "" if summary.endswith("\n") else "\n"
+    return f"{summary}{separator}{title}：{cleaned_body}"
 
 
 def _merge_notes(base_notes: list[str] | None, extra_notes: list[str] | None) -> list[str]:
@@ -1084,9 +1463,33 @@ def _agent_payload(state: WorkflowState, agent_name: str) -> dict[str, object]:
         payload["alt_data_inputs"] = state.get("alt_data_inputs", {})
         payload["unavailable_signals"] = state.get("unavailable_signals", [])
     if agent_name == "news":
-        payload["newsflow_inputs"] = state.get("newsflow_inputs", {})
+        newsflow_inputs = state.get("newsflow_inputs", {})
+        top_headlines = []
+        for item in list(newsflow_inputs.get("top_headlines") or []):
+            if not isinstance(item, dict):
+                continue
+            top_headlines.append(
+                {
+                    "source_cn": item.get("source_cn"),
+                    "title_cn": item.get("title_cn"),
+                    "link": item.get("link"),
+                    "published_at": item.get("published_at"),
+                }
+            )
+        payload["newsflow_inputs"] = {
+            "status": newsflow_inputs.get("status"),
+            "summary": newsflow_inputs.get("summary"),
+            "headline_count": newsflow_inputs.get("headline_count"),
+            "source_count": newsflow_inputs.get("source_count"),
+            "sentiment": newsflow_inputs.get("sentiment"),
+            "sentiment_score": newsflow_inputs.get("sentiment_score"),
+            "topics": newsflow_inputs.get("topics"),
+            "top_headlines": top_headlines,
+        }
     if agent_name == "macro":
         payload["macro_inputs"] = state.get("macro_inputs", {})
+    if agent_name == "market_sentiment":
+        payload["polymarket_inputs"] = state.get("polymarket_inputs", {})
     return payload
 
 
@@ -1165,9 +1568,20 @@ def _market_sentiment_summary(inputs: dict[str, object]) -> str:
             "neutral": "中性",
         }.get(newsflow_sentiment, "中性")
         newsflow_text = f"新闻流已抓取 {newsflow_headline_count} 条标题，整体情绪为{sentiment_text}"
+    polymarket_count = int(inputs.get("polymarket_gold_related_market_count") or 0)
+    polymarket_text = "Polymarket 公开情绪暂不可用"
+    if polymarket_count:
+        bullish_count = int(inputs.get("polymarket_bullish_count") or 0)
+        bearish_count = int(inputs.get("polymarket_bearish_count") or 0)
+        neutral_count = int(inputs.get("polymarket_neutral_count") or 0)
+        summary = str(inputs.get("polymarket_summary") or "").strip()
+        bias_text = f"偏多 {bullish_count} 个，偏空 {bearish_count} 个，中性 {neutral_count} 个"
+        polymarket_text = f"Polymarket 已识别到 {polymarket_count} 个与黄金相关的市场，{bias_text}"
+        if summary:
+            polymarket_text = f"{polymarket_text}；{summary}"
     return (
         f"市场情绪按{_direction_label_cn(trend_bias)}方向解读，{rsi_text}，{cftc_text}，"
-        f"{newsflow_text}，{feedback_text}{unavailable_text}。"
+        f"{newsflow_text}，{polymarket_text}，{feedback_text}{unavailable_text}。"
     )
 
 
@@ -1187,6 +1601,8 @@ def _market_sentiment_confidence(inputs: dict[str, object], direction: ForecastD
     if inputs.get("feedback_signal_count"):
         confidence += 0.05
     if inputs.get("rsi_14") is not None:
+        confidence += 0.04
+    if inputs.get("polymarket_gold_related_market_count"):
         confidence += 0.04
     return round(min(max(confidence, 0.25), 0.58), 2)
 
@@ -1270,8 +1686,10 @@ def _news_summary(inputs: dict[str, object]) -> str:
     for item in top_headlines[:3]:
         if not isinstance(item, dict):
             continue
-        source = translate_source_name_to_chinese(str(item.get("source") or "unknown"))
-        title = translate_headline_to_chinese(str(item.get("title") or "").strip())
+        source = str(
+            item.get("source_cn") or translate_source_name_to_chinese(str(item.get("source") or "unknown"))
+        ).strip()
+        title = str(item.get("title_cn") or translate_headline_to_chinese(str(item.get("title") or "").strip())).strip()
         if title:
             representative.append(f"{source}: {title}")
     topic_text = ""
