@@ -81,8 +81,7 @@ Supported backend variable names:
 - `GOLDFXGRAPH_DATABASE_URL`
 - `DATABASE_URL` as a compatibility alias when `GOLDFXGRAPH_DATABASE_URL` is unset or cleared
 - `GOLDFXGRAPH_XAUUSD_CSV_PATH`
-- `GOLDFXGRAPH_CURRENT_QUOTE_URL`
-- `GOLDFXGRAPH_CURRENT_QUOTE_API_KEY`
+- `GOLDFXGRAPH_CURRENT_QUOTE_URL`（TradingView 实时报价页面地址）
 - `GOLDFXGRAPH_OPENAI_API_KEY`
 - `OPENAI_API_KEY` as a compatibility alias when `GOLDFXGRAPH_OPENAI_API_KEY` is not set
 - `GOLDFXGRAPH_OPENAI_MODEL`
@@ -98,7 +97,8 @@ Recommended local flow:
 2. Replace placeholder values such as `change_me` with local secrets.
 3. If you prefer the compatibility aliases `DATABASE_URL` or `OPENAI_API_KEY`, leave the corresponding `GOLDFXGRAPH_*` key blank or remove it from `dev.env`.
 4. Keep real API keys and database passwords out of committed files.
-5. The application settings layer reads `dev.env` by default, so backend commands such as `uv run ...` will use those values when the app loads its settings.
+5. `GOLDFXGRAPH_CURRENT_QUOTE_URL` should point at the TradingView XAUUSD page when you need to override the default realtime quote source.
+6. The application settings layer reads `dev.env` by default, so backend commands such as `uv run ...` will use those values when the app loads its settings.
 
 Example:
 

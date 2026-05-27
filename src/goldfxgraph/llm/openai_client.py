@@ -80,6 +80,13 @@ class OpenAIAgentClient:
                 )
                 response.raise_for_status()
                 data = response.json()
+        except httpx.HTTPStatusError as exc:
+            response_text = exc.response.text.strip()
+            response_excerpt = response_text[:300]
+            suffix = f": {response_excerpt}" if response_excerpt else ""
+            raise OpenAIClientError(
+                f"OpenAI-compatible request failed for {agent_name} with HTTP {exc.response.status_code}{suffix}"
+            ) from exc
         except httpx.HTTPError as exc:
             raise OpenAIClientError(f"OpenAI-compatible request failed for {agent_name}") from exc
         except JSONDecodeError as exc:

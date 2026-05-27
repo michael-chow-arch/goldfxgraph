@@ -3,8 +3,12 @@ from pathlib import Path
 import httpx
 import pytest
 
+from goldfxgraph.cli import main as goldfxgraph_main
 from goldfxgraph.market_data.csv_loader import CsvValidationError, load_xauusd_daily_csv
 from goldfxgraph.market_data.current_quote import CurrentQuoteProvider, QuoteProviderError
+from goldfxgraph.market_data.ingest import import_xauusd_daily_csv_to_db
+from goldfxgraph.persistence.database import create_session_factory, init_models
+from goldfxgraph.persistence.repositories import MarketDataRepository
 from goldfxgraph.schemas.forecast import DailyBar
 
 
@@ -49,6 +53,68 @@ def test_load_xauusd_daily_csv_rejects_invalid_ohlc_range(tmp_path: Path) -> Non
         load_xauusd_daily_csv(csv_path)
 
 
+@pytest.mark.asyncio
+async def test_import_xauusd_daily_csv_to_db_writes_rows_and_keeps_latest_bar(tmp_path: Path) -> None:
+    csv_path = tmp_path / "xauusd.csv"
+    csv_path.write_text(
+        "date,open,high,low,close,volume,source,symbol\n"
+        "2024-01-01,2040,2050,2030,2045,9,unit,XAUUSD\n"
+        "2024-01-02,2050,2060,2040,2055,10,unit,XAUUSD\n",
+        encoding="utf-8",
+    )
+
+    session_factory = create_session_factory("sqlite+aiosqlite:///:memory:")
+    await init_models(session_factory.engine)
+    repository = MarketDataRepository(session_factory)
+
+    written = await import_xauusd_daily_csv_to_db(csv_path, repository)
+
+    latest = await repository.get_latest_market_bar("XAUUSD")
+    count = await repository.get_market_bars_count("XAUUSD")
+
+    assert written == 2
+    assert count == 2
+    assert latest is not None
+    assert latest.date.isoformat() == "2024-01-02"
+    assert latest.close == 2055
+    assert latest.source == "unit"
+
+
+@pytest.mark.asyncio
+async def test_import_xauusd_daily_csv_to_db_is_idempotent(tmp_path: Path) -> None:
+    csv_path = tmp_path / "xauusd.csv"
+    csv_path.write_text(
+        "date,open,high,low,close,volume,source,symbol\n"
+        "2024-01-01,2040,2050,2030,2045,9,unit,XAUUSD\n"
+        "2024-01-02,2050,2060,2040,2055,10,unit,XAUUSD\n",
+        encoding="utf-8",
+    )
+
+    session_factory = create_session_factory("sqlite+aiosqlite:///:memory:")
+    await init_models(session_factory.engine)
+    repository = MarketDataRepository(session_factory)
+
+    first_written = await import_xauusd_daily_csv_to_db(csv_path, repository)
+    second_written = await import_xauusd_daily_csv_to_db(csv_path, repository)
+    count = await repository.get_market_bars_count("XAUUSD")
+
+    assert first_written == 2
+    assert second_written == 2
+    assert count == 2
+
+
+@pytest.mark.asyncio
+async def test_import_xauusd_daily_csv_to_db_rejects_missing_required_columns(tmp_path: Path) -> None:
+    csv_path = tmp_path / "bad.csv"
+    csv_path.write_text("date,open,high,close\n2024-01-01,1,2,3\n", encoding="utf-8")
+
+    session_factory = create_session_factory("sqlite+aiosqlite:///:memory:")
+    repository = MarketDataRepository(session_factory)
+
+    with pytest.raises(CsvValidationError, match="low"):
+        await import_xauusd_daily_csv_to_db(csv_path, repository)
+
+
 def test_daily_bar_rejects_non_finite_or_negative_values() -> None:
     from datetime import date
 
@@ -59,225 +125,152 @@ def test_daily_bar_rejects_non_finite_or_negative_values() -> None:
         DailyBar(date=date(2024, 1, 1), open=1, high=float("inf"), low=1, close=1)
 
 
-def test_quote_provider_tries_multiple_sources_until_success() -> None:
+def test_current_quote_provider_uses_tradingview_only_and_ignores_legacy_candidates() -> None:
     requested_urls: list[str] = []
-    headers_by_host: dict[str, str | None] = {}
+    fixture_html = (Path(__file__).parent / "fixtures" / "tradingview_xauusd_page.html").read_text(encoding="utf-8")
 
     def handler(request: httpx.Request) -> httpx.Response:
         requested_urls.append(str(request.url))
-        headers_by_host[request.url.host or ""] = request.headers.get("authorization")
-        if request.url.host == "first.example.test":
-            return httpx.Response(503, request=request)
-        if request.url.host == "second.example.test":
-            return httpx.Response(
-                200,
-                json={"close": 2058.5, "data_timestamp": "2024-01-01T00:00:00Z"},
-                request=request,
-            )
-        return httpx.Response(500, request=request)
-
-    provider = CurrentQuoteProvider(
-        url="https://first.example.test/latest?apikey=secret",
-        api_key="token",
-        candidate_urls=[
-            "https://second.example.test/quote?apikey=backup-secret",
-            "https://third.example.test/quote",
-        ],
-        transport=httpx.MockTransport(handler),
-    )
-
-    quote = provider.fetch()
-
-    assert requested_urls == [
-        "https://first.example.test/latest?apikey=secret",
-        "https://second.example.test/quote?apikey=backup-secret",
-    ]
-    assert quote.current_price == 2058.5
-    assert quote.data_source == "second.example.test"
-    assert headers_by_host["first.example.test"] == "Bearer token"
-    assert headers_by_host["second.example.test"] is None
-
-
-def test_quote_provider_uses_actual_successful_fallback_host_when_source_name_is_set() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.host == "primary.example.test":
-            return httpx.Response(503, request=request)
-        return httpx.Response(
-            200,
-            json={"current_price": 2061.25, "timestamp": "2024-01-02T00:00:00Z"},
-            request=request,
-        )
-
-    provider = CurrentQuoteProvider(
-        url="https://primary.example.test/latest",
-        api_key=None,
-        source_name="configured-primary",
-        candidate_urls=["https://fallback.example.test/latest"],
-        transport=httpx.MockTransport(handler),
-    )
-
-    quote = provider.fetch()
-
-    assert quote.data_source == "fallback.example.test"
-
-
-def test_quote_provider_returns_controlled_error_when_all_sources_fail() -> None:
-    requested_urls: list[str] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requested_urls.append(str(request.url))
-        if request.url.host == "first.example.test":
+        if request.url.host == "www.tradingview.com":
+            return httpx.Response(200, text=fixture_html, request=request)
+        if request.url.host == "legacy-quote.example.test":
             return httpx.Response(500, request=request)
-        return httpx.Response(200, json={"price": "nan", "source": "mock-feed"}, request=request)
-
-    provider = CurrentQuoteProvider(
-        url="https://first.example.test/latest?apikey=secret",
-        api_key=None,
-        candidate_urls=["https://second.example.test/quote?token=secret-backup"],
-        transport=httpx.MockTransport(handler),
-    )
-
-    with pytest.raises(QuoteProviderError, match="Current quote discovery failed") as exc_info:
-        provider.fetch()
-
-    assert requested_urls == [
-        "https://first.example.test/latest?apikey=secret",
-        "https://second.example.test/quote?token=secret-backup",
-    ]
-    assert isinstance(exc_info.value.__cause__, QuoteProviderError)
-    assert "invalid price" in str(exc_info.value.__cause__)
-    assert "secret" not in str(exc_info.value)
-
-
-def test_quote_provider_rejects_non_finite_price() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"price": "nan", "source": "unit"}, request=request)
-
-    provider = CurrentQuoteProvider(
-        url="https://quote.example.test/latest?apikey=secret",
-        api_key=None,
-        candidate_urls=[],
-        transport=httpx.MockTransport(handler),
-    )
-
-    with pytest.raises(QuoteProviderError, match="Current quote discovery failed"):
-        provider.fetch()
-
-
-def test_quote_provider_sanitizes_url_fallback_source() -> None:
-    captured_headers = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured_headers.update(request.headers)
-        return httpx.Response(
-            200,
-            json={
-                "price": 2050.5,
-                "timestamp": "2024-01-01T00:00:00Z",
-                "source": "https://quote.example.test/latest?apikey=secret",
-            },
-            request=request,
-        )
-
-    provider = CurrentQuoteProvider(
-        url="https://quote.example.test/latest?apikey=secret",
-        api_key="token",
-        candidate_urls=[],
-        transport=httpx.MockTransport(handler),
-    )
-
-    quote = provider.fetch()
-
-    assert quote.current_price == 2050.5
-    assert quote.data_source == "quote.example.test"
-    assert "secret" not in quote.data_source
-    assert captured_headers["authorization"] == "Bearer token"
-
-
-def test_quote_provider_uses_default_candidate_urls_with_dedupe() -> None:
-    requested_urls: list[str] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requested_urls.append(str(request.url))
-        if request.url.host == "primary.example.test":
-            return httpx.Response(503, request=request)
-        if str(request.url) == "https://api.gold-api.com/price/XAU":
-            return httpx.Response(
-                200,
-                json={"price": 2049.75, "timestamp": "2024-01-03T00:00:00Z"},
-                request=request,
-            )
         return httpx.Response(500, request=request)
-
-    provider = CurrentQuoteProvider(
-        url="https://primary.example.test/latest",
-        api_key=None,
-        candidate_urls=None,
-        transport=httpx.MockTransport(handler),
-    )
-
-    quote = provider.fetch()
-
-    assert requested_urls == [
-        "https://primary.example.test/latest",
-        "https://api.gold-api.com/price/XAU",
-    ]
-    assert quote.current_price == 2049.75
-
-
-def test_quote_provider_does_not_send_authorization_to_default_candidates_without_explicit_url() -> None:
-    requested_urls: list[str] = []
-    captured_authorization_headers: list[str | None] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requested_urls.append(str(request.url))
-        captured_authorization_headers.append(request.headers.get("authorization"))
-        if str(request.url) == "https://api.gold-api.com/price/XAU":
-            return httpx.Response(503, request=request)
-        return httpx.Response(
-            200,
-            json={"price": 2051.0, "timestamp": "2024-01-04T00:00:00Z"},
-            request=request,
-        )
 
     provider = CurrentQuoteProvider(
         url=None,
-        api_key="token-that-must-not-leak",
-        candidate_urls=None,
+        api_key="token",
+        source_name="legacy-source-name",
+        candidate_urls=["https://legacy-quote.example.test/price/XAU"],
         transport=httpx.MockTransport(handler),
     )
 
     quote = provider.fetch()
 
-    assert requested_urls == [
-        "https://api.gold-api.com/price/XAU",
-        "https://api.gold-api.com/price/XAU/USD",
-    ]
-    assert captured_authorization_headers == [None, None]
-    assert quote.current_price == 2051.0
+    assert requested_urls == ["https://www.tradingview.com/symbols/XAUUSD/"]
+    assert quote.symbol == "XAUUSD"
+    assert quote.current_price == 4567.78
+    assert quote.data_source == "TradingView"
+    assert quote.data_timestamp.isoformat() == "2026-05-25T02:09:05.812308+00:00"
 
 
-def test_quote_provider_accepts_updated_at_and_normalizes_xau_usd_symbol() -> None:
+def test_tradingview_quote_provider_parses_fixture_html() -> None:
+    from goldfxgraph.market_data.tradingview_quote import TradingViewQuoteProvider
+
+    fixture_html = (Path(__file__).parent / "fixtures" / "tradingview_xauusd_page.html").read_text(encoding="utf-8")
+
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "price": 4510.5,
-                "symbol": "XAU",
-                "currency": "USD",
-                "updatedAt": "2026-05-23T02:56:05Z",
-            },
-            request=request,
-        )
+        assert str(request.url) == "https://www.tradingview.com/symbols/XAUUSD/"
+        return httpx.Response(200, text=fixture_html, request=request)
 
-    provider = CurrentQuoteProvider(
-        url="https://api.gold-api.com/price/XAU",
-        candidate_urls=[],
-        transport=httpx.MockTransport(handler),
-    )
+    provider = TradingViewQuoteProvider(transport=httpx.MockTransport(handler))
 
     quote = provider.fetch()
 
     assert quote.symbol == "XAUUSD"
-    assert quote.current_price == 4510.5
-    assert quote.data_timestamp.isoformat() == "2026-05-23T02:56:05+00:00"
+    assert quote.current_price == 4567.78
+    assert quote.data_source == "TradingView"
+    assert quote.data_timestamp.isoformat() == "2026-05-25T02:09:05.812308+00:00"
+
+
+def test_tradingview_quote_provider_rejects_broken_fixture_html() -> None:
+    from goldfxgraph.market_data.tradingview_quote import TradingViewQuoteProvider
+
+    broken_html = (
+        Path(__file__).parent / "fixtures" / "tradingview_xauusd_page_broken.html"
+    ).read_text(encoding="utf-8")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=broken_html, request=request)
+
+    provider = TradingViewQuoteProvider(transport=httpx.MockTransport(handler))
+
+    with pytest.raises(QuoteProviderError, match="TradingView quote page missing current price"):
+        provider.fetch()
+
+
+def test_tradingview_quote_provider_raises_on_network_failure() -> None:
+    from goldfxgraph.market_data.tradingview_quote import TradingViewQuoteProvider
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("network down", request=request)
+
+    provider = TradingViewQuoteProvider(transport=httpx.MockTransport(handler))
+
+    with pytest.raises(QuoteProviderError, match="TradingView quote request failed"):
+        provider.fetch()
+
+
+def test_current_quote_provider_ignores_non_tradingview_url_override() -> None:
+    requested_urls: list[str] = []
+    fixture_html = (Path(__file__).parent / "fixtures" / "tradingview_xauusd_page.html").read_text(encoding="utf-8")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if request.url.host == "www.tradingview.com":
+            return httpx.Response(200, text=fixture_html, request=request)
+        return httpx.Response(
+            500,
+            request=request,
+        )
+
+    provider = CurrentQuoteProvider(
+        url="https://not-tradingview.example.test/latest",
+        api_key=None,
+        candidate_urls=["https://legacy-quote.example.test/price/XAU"],
+        transport=httpx.MockTransport(handler),
+    )
+
+    quote = provider.fetch()
+
+    assert requested_urls == ["https://www.tradingview.com/symbols/XAUUSD/"]
+    assert quote.symbol == "XAUUSD"
+    assert quote.current_price == 4567.78
+    assert quote.data_source == "TradingView"
+
+
+def test_yahoo_history_fetcher_is_removed_from_daily_bar_backfill() -> None:
+    from datetime import date
+
+    from goldfxgraph.market_data.yahoo_history import YahooHistoryError, fetch_gold_daily_bars
+
+    with pytest.raises(YahooHistoryError, match="removed; use TradingView history instead"):
+        fetch_gold_daily_bars(
+            start_date=date(2026, 5, 23),
+            end_date=date(2026, 5, 26),
+        )
+
+
+def test_goldfxgraph_cli_dispatches_import_market_data_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    csv_path = tmp_path / "xauusd.csv"
+    captured: dict[str, object] = {}
+
+    def fake_main(argv: list[str] | None = None) -> int:
+        captured["argv"] = list(argv or [])
+        return 0
+
+    monkeypatch.setattr("goldfxgraph.market_data.ingest.main", fake_main)
+
+    exit_code = goldfxgraph_main(
+        [
+            "import-market-data",
+            "--csv-path",
+            str(csv_path),
+            "--symbol",
+            "XAUUSD",
+            "--env-file",
+            "dev.env",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["argv"] == [
+        "--csv-path",
+        str(csv_path),
+        "--symbol",
+        "XAUUSD",
+        "--env-file",
+        "dev.env",
+    ]

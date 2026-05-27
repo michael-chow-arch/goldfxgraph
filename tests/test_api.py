@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -14,7 +15,14 @@ from goldfxgraph.llm.openai_client import OpenAIAgentClient, OpenAIClientError
 from goldfxgraph.market_data.current_quote import QuoteProviderError
 from goldfxgraph.packages.common.settings import GoldFXGraphSettings
 from goldfxgraph.persistence.repositories import ForecastRepository
-from goldfxgraph.schemas.forecast import AgentVote, CurrentQuote, ForecastDirection, ForecastResult, ResearchRunResult
+from goldfxgraph.schemas.forecast import (
+    AgentVote,
+    CurrentQuote,
+    DailyBar,
+    ForecastDirection,
+    ForecastResult,
+    ResearchRunResult,
+)
 from goldfxgraph.workflow import nodes
 
 
@@ -24,6 +32,7 @@ class InMemoryForecastRepository:
         self._next_forecast_id = 1
         self.runs: dict[int, ResearchRunResult] = {}
         self.forecasts: dict[int, ForecastResult] = {}
+        self.market_bars: dict[tuple[str, date], DailyBar] = {}
 
     async def create_research_run(self, input_summary: dict[str, object]) -> Any:
         run_id = self._next_run_id
@@ -53,10 +62,53 @@ class InMemoryForecastRepository:
         self.runs[run_id] = self.runs[run_id].model_copy(update={"forecast": saved})
         return saved
 
+    async def upsert_market_bars(self, bars: list[DailyBar]) -> int:
+        for bar in bars:
+            self.market_bars[(bar.symbol.upper(), bar.date)] = bar
+        return len(bars)
+
+    async def get_latest_market_bar(self, symbol: str = "XAUUSD") -> DailyBar | None:
+        symbol_key = symbol.strip().upper()
+        bars = [bar for (bar_symbol, _), bar in self.market_bars.items() if bar_symbol == symbol_key]
+        return max(bars, key=lambda bar: (bar.date, bar.symbol), default=None)
+
+    async def get_market_bars_between(
+        self,
+        symbol: str,
+        start_date: date,
+        end_date: date,
+    ) -> list[DailyBar]:
+        symbol_key = symbol.strip().upper()
+        bars = [
+            bar
+            for (bar_symbol, bar_date), bar in self.market_bars.items()
+            if bar_symbol == symbol_key and start_date <= bar_date <= end_date
+        ]
+        return sorted(bars, key=lambda bar: (bar.date, bar.symbol))
+
+    async def get_recent_market_bars(self, symbol: str = "XAUUSD", limit: int = 60) -> list[DailyBar]:
+        symbol_key = symbol.strip().upper()
+        bars = [bar for (bar_symbol, _), bar in self.market_bars.items() if bar_symbol == symbol_key]
+        sorted_bars = sorted(bars, key=lambda bar: (bar.date, bar.symbol))
+        return sorted_bars[-max(1, min(int(limit), 180)) :]
+
+    async def get_market_bars_for_date(self, symbol: str, target_date: date) -> DailyBar | None:
+        return self.market_bars.get((symbol.strip().upper(), target_date))
+
+    async def get_market_bars_count(self, symbol: str = "XAUUSD") -> int:
+        symbol_key = symbol.strip().upper()
+        return sum(1 for (bar_symbol, _) in self.market_bars if bar_symbol == symbol_key)
+
     async def get_latest_forecast(self) -> ForecastResult | None:
         if not self.forecasts:
             return None
         return self.forecasts[max(self.forecasts)]
+
+    async def get_forecast_history(self, limit: int = 50) -> list[Any]:
+        return []
+
+    async def get_latest_evaluation_summary(self, limit: int = 5) -> list[str]:
+        return []
 
     async def get_research_run(self, run_id: int) -> ResearchRunResult | None:
         return self.runs.get(run_id)
@@ -78,6 +130,51 @@ def test_health_endpoint() -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+
+
+def test_startup_fails_when_eod_maintenance_fails(monkeypatch: Any, tmp_path: Path) -> None:
+    async def fake_run_eod_maintenance(**kwargs: Any) -> Any:
+        return type(
+            "Result",
+            (),
+            {
+                "status": "failed",
+                "backfill": type(
+                    "Backfill",
+                    (),
+                    {
+                        "status": "failed",
+                        "failure_reason": "history source unavailable",
+                    },
+                )(),
+                "evaluation": type("Evaluation", (), {"status": "no-op"})(),
+            },
+        )()
+
+    monkeypatch.setattr("goldfxgraph.api.app.run_eod_maintenance", fake_run_eod_maintenance)
+
+    settings = GoldFXGraphSettings(
+        xauusd_csv_path=tmp_path / "unused.csv",
+        database_url="sqlite+aiosqlite:///:memory:",
+    )
+
+    with pytest.raises(RuntimeError, match="EOD maintenance failed"):
+        with TestClient(create_app(testing=False, settings=settings)):
+            pass
+
+
+def test_get_market_data_bars_endpoint_returns_recent_daily_bars() -> None:
+    repository = InMemoryForecastRepository()
+    _seed_market_data(repository)
+    client = TestClient(create_app(testing=True, repository=cast(ForecastRepository, repository)))
+
+    response = client.get("/api/v1/market-data/bars?symbol=XAUUSD&limit=3")
+
+    assert response.status_code == 200
+    bars = response.json()
+    assert len(bars) == 3
+    assert [bar["date"] for bar in bars] == ["2024-01-04", "2024-01-05", "2024-01-08"]
+    assert bars[-1]["close"] == 2068
 
 
 def test_api_allows_local_frontend_origin_via_cors() -> None:
@@ -135,22 +232,25 @@ def test_create_research_run_succeeds_without_manual_quote_url_when_discovery_su
     monkeypatch: Any,
     tmp_path: Path,
 ) -> None:
-    csv_path = _write_csv(tmp_path)
     repository = InMemoryForecastRepository()
+    _seed_market_data(repository)
+    async def fake_backfill(**kwargs: Any) -> Any:
+        return type("BackfillResult", (), {"status": "no-op", "failure_reason": None})()
+
+    monkeypatch.setattr(nodes, "run_eod_backfill", fake_backfill)
     monkeypatch.setattr(
         nodes.CurrentQuoteProvider,
         "fetch",
         lambda self: CurrentQuote(
             symbol="XAUUSD",
             current_price=2058.0,
-            data_source="discovered-provider",
+            data_source="TradingView",
             data_timestamp=datetime.now(UTC),
         ),
     )
     settings = GoldFXGraphSettings(
-        xauusd_csv_path=csv_path,
+        xauusd_csv_path=tmp_path / "unused.csv",
         current_quote_url=None,
-        current_quote_api_key=SecretStr("quote-secret"),
         openai_api_key=SecretStr("agent-key"),
     )
     client = TestClient(create_app(testing=True, settings=settings, repository=cast(ForecastRepository, repository)))
@@ -159,25 +259,63 @@ def test_create_research_run_succeeds_without_manual_quote_url_when_discovery_su
 
     assert response.status_code == 200
     assert response.json()["status"] == "success"
-    assert response.json()["forecast"]["data_source"] == "discovered-provider"
+    assert response.json()["forecast"]["data_source"] == "TradingView"
+    assert response.json()["forecast"]["current_price"] == 2058.0
     assert "agent-key" not in response.text
     assert "quote-secret" not in response.text
     assert repository.runs[1].status == "success"
+
+
+def test_create_research_run_returns_market_data_error_when_freshness_preflight_fails(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    repository = InMemoryForecastRepository()
+
+    async def fake_backfill(**kwargs: Any) -> Any:
+        return type(
+            "BackfillResult",
+            (),
+            {
+                "status": "failed",
+                "failure_reason": "TradingView history unavailable",
+            },
+        )()
+
+    monkeypatch.setattr(nodes, "run_eod_backfill", fake_backfill)
+    settings = GoldFXGraphSettings(
+        xauusd_csv_path=tmp_path / "unused.csv",
+        current_quote_url=None,
+        openai_api_key=SecretStr("agent-key"),
+    )
+    client = TestClient(create_app(testing=True, settings=settings, repository=cast(ForecastRepository, repository)))
+
+    response = client.post("/api/v1/research-runs")
+
+    assert response.status_code == 503
+    assert response.json()["error"]["type"] == "market_data_error"
+    assert "TradingView history unavailable" in response.json()["error"]["message"]
+    assert repository.runs[1].status == "failed"
+    assert "TradingView history unavailable" in repository.runs[1].error_message
 
 
 def test_create_research_run_surfaces_remote_agent_fallback_in_forecast(
     monkeypatch: Any,
     tmp_path: Path,
 ) -> None:
-    csv_path = _write_csv(tmp_path)
     repository = InMemoryForecastRepository()
+    _seed_market_data(repository)
+    async def fake_backfill(**kwargs: Any) -> Any:
+        return type("BackfillResult", (), {"status": "no-op", "failure_reason": None})()
+
+    monkeypatch.setattr(nodes, "run_eod_backfill", fake_backfill)
     monkeypatch.setattr(
         nodes.CurrentQuoteProvider,
         "fetch",
         lambda self: CurrentQuote(
             symbol="XAUUSD",
             current_price=2058.0,
-            data_source="discovered-provider",
+            data_source="TradingView",
             data_timestamp=datetime.now(UTC),
         ),
     )
@@ -187,7 +325,7 @@ def test_create_research_run_surfaces_remote_agent_fallback_in_forecast(
         lambda self, agent_name, payload: (_ for _ in ()).throw(OpenAIClientError(f"{agent_name} failed")),
     )
     settings = GoldFXGraphSettings(
-        xauusd_csv_path=csv_path,
+        xauusd_csv_path=tmp_path / "unused.csv",
         openai_base_url="https://agent.example.test/v1",
         openai_model="gpt-4.1-mini",
         openai_api_key=SecretStr("agent-key"),
@@ -197,6 +335,7 @@ def test_create_research_run_surfaces_remote_agent_fallback_in_forecast(
     response = client.post("/api/v1/research-runs")
 
     assert response.status_code == 200
+    assert response.json()["forecast"]["data_source"] == "TradingView"
     notes = response.json()["forecast"]["risk_notes"]
     assert any("OpenAI-compatible technical agent 调用失败" in note for note in notes)
     assert any("OpenAI-compatible macro agent 调用失败" in note for note in notes)
@@ -260,10 +399,15 @@ def test_invalid_workflow_terminal_state_marks_run_failed(monkeypatch: Any) -> N
 
 def test_configured_quote_provider_failure_records_sanitized_error(tmp_path: Path) -> None:
     repository = InMemoryForecastRepository()
+    _seed_market_data(repository)
+    async def fake_backfill(**kwargs: Any) -> Any:
+        return type("BackfillResult", (), {"status": "no-op", "failure_reason": None})()
+
+    original_backfill = nodes.run_eod_backfill
+    nodes.run_eod_backfill = fake_backfill
     settings = GoldFXGraphSettings(
-        xauusd_csv_path=_write_csv(tmp_path),
+        xauusd_csv_path=tmp_path / "unused.csv",
         current_quote_url="not-a-valid-url",
-        current_quote_api_key=SecretStr("quote-secret"),
     )
     original_fetch = nodes.CurrentQuoteProvider.fetch
 
@@ -277,6 +421,7 @@ def test_configured_quote_provider_failure_records_sanitized_error(tmp_path: Pat
         response = client.post("/api/v1/research-runs")
     finally:
         nodes.CurrentQuoteProvider.fetch = original_fetch
+        nodes.run_eod_backfill = original_backfill
 
     assert response.status_code == 503
     assert response.json()["error"]["type"] == "quote_provider_error"
@@ -307,6 +452,7 @@ def test_latest_forecast_returns_seeded_forecast_without_secret_leak() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["symbol"] == "XAUUSD"
+    assert body["data_source"] == "TradingView"
     assert body["direction"] == "bullish"
     assert body["agent_votes"][0]["agent"] == "technical"
     assert "agent-key" not in response.text
@@ -319,7 +465,7 @@ def _forecast() -> ForecastResult:
         run_id=1,
         reference_time=now,
         data_timestamp=now,
-        data_source="unit-test",
+        data_source="TradingView",
         current_price=2050.25,
         daily_open=2040,
         daily_high=2060,
@@ -362,3 +508,65 @@ def _write_csv(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+def _seed_market_data(repository: InMemoryForecastRepository) -> None:
+    bars = [
+        DailyBar(
+            date=datetime(2024, 1, 1).date(),
+            open=2040,
+            high=2050,
+            low=2030,
+            close=2045,
+            source="unit",
+            symbol="XAUUSD",
+        ),
+        DailyBar(
+            date=datetime(2024, 1, 2).date(),
+            open=2045,
+            high=2060,
+            low=2040,
+            close=2055,
+            source="unit",
+            symbol="XAUUSD",
+        ),
+        DailyBar(
+            date=datetime(2024, 1, 3).date(),
+            open=2050,
+            high=2065,
+            low=2045,
+            close=2058,
+            source="unit",
+            symbol="XAUUSD",
+        ),
+        DailyBar(
+            date=datetime(2024, 1, 4).date(),
+            open=2052,
+            high=2070,
+            low=2048,
+            close=2061,
+            source="unit",
+            symbol="XAUUSD",
+        ),
+        DailyBar(
+            date=datetime(2024, 1, 5).date(),
+            open=2055,
+            high=2072,
+            low=2050,
+            close=2064,
+            source="unit",
+            symbol="XAUUSD",
+        ),
+        DailyBar(
+            date=datetime(2024, 1, 8).date(),
+            open=2058,
+            high=2075,
+            low=2052,
+            close=2068,
+            source="unit",
+            symbol="XAUUSD",
+        ),
+    ]
+    import asyncio
+
+    asyncio.run(repository.upsert_market_bars(bars))

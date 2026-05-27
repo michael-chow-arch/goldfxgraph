@@ -16,6 +16,7 @@ dependencies = [
   "python-dotenv>=1.2.2",
   "sqlalchemy>=2.0.0",
   "uvicorn[standard]>=0.38.0",
+  "websockets>=16.0",
 ]
 description = "A LangGraph-based XAU/USD daily research agent."
 name = "goldfxgraph"
