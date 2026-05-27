@@ -220,6 +220,12 @@ __marimo__/
 # macOS
 .DS_Store
 
+# Codex / OpenSpec local artifacts
+.codex/spec/
+.codex/spec/**
+.codex/superpower/
+.codex/superpowers/
+
 # Frontend local artifacts
 apps/web/node_modules/
 apps/web/.artifacts/

@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import dotenv_values
-from pydantic import AliasChoices, Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,7 +17,6 @@ class GoldFXGraphSettings(BaseSettings):
     )
     xauusd_csv_path: Path = Path("data/raw/xauusd_daily.csv")
     current_quote_url: str | None = None
-    current_quote_api_key: SecretStr | None = None
     agent_api_base_url: str | None = None
     agent_api_key: SecretStr | None = None
     eod_backfill_timezone: str = "America/New_York"
@@ -31,6 +30,34 @@ class GoldFXGraphSettings(BaseSettings):
     openai_base_url: str | None = Field(default=None, validation_alias="GOLDFXGRAPH_OPENAI_BASE_URL")
 
     model_config = SettingsConfigDict(env_prefix="GOLDFXGRAPH_", extra="ignore", populate_by_name=True)
+
+    @field_validator("agent_api_key", "openai_api_key", mode="before")
+    @classmethod
+    def _normalize_placeholder_secret(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, SecretStr):
+            raw_value = value.get_secret_value().strip()
+        else:
+            raw_value = str(value).strip()
+
+        if not raw_value:
+            return None
+
+        if raw_value.lower() in {
+            "change_me",
+            "changeme",
+            "replace_me",
+            "replace-me",
+            "todo",
+            "todo-change-me",
+            "your_secret_here",
+            "your-secret-here",
+            "secret",
+        }:
+            return None
+
+        return value
 
 
 def _env_file_field_keys() -> dict[str, tuple[str, ...]]:

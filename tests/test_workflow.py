@@ -6,17 +6,30 @@ import pytest
 from pydantic import SecretStr
 
 from goldfxgraph.indicators.technical import compute_technical_indicators
+from goldfxgraph.llm.openai_client import OpenAIAgentResult
+from goldfxgraph.market_data.current_quote import QuoteProviderError
 from goldfxgraph.packages.common.settings import GoldFXGraphSettings
 from goldfxgraph.persistence.database import create_session_factory, init_models
 from goldfxgraph.persistence.repositories import ForecastRepository
 from goldfxgraph.schemas.forecast import AgentVote, CurrentQuote, DailyBar, ForecastDirection
 from goldfxgraph.workflow.graph import REQUIRED_NODE_NAMES, build_forecast_graph
 from goldfxgraph.workflow.nodes import (
+    MarketDataFreshnessError,
     WorkflowState,
+    agent_alt_data_analysis,
     agent_forecast_planning,
     agent_macro_analysis,
+    agent_market_sentiment_analysis,
+    agent_news_analysis,
     agent_technical_analysis,
     create_research_forecast_from_inputs,
+    tool_ensure_market_data_freshness,
+    tool_fetch_alt_data_inputs,
+    tool_fetch_current_gold_quote,
+    tool_fetch_macro_inputs,
+    tool_fetch_market_sentiment_inputs,
+    tool_fetch_newsflow_inputs,
+    tool_fetch_pizza_index_inputs,
     tool_persist_forecast,
     tool_persist_research_run,
 )
@@ -38,7 +51,7 @@ def _bars() -> list[DailyBar]:
 def _quote() -> CurrentQuote:
     return CurrentQuote(
         current_price=2040,
-        data_source="unit",
+        data_source="TradingView",
         data_timestamp=datetime.now(UTC),
     )
 
@@ -47,6 +60,96 @@ def test_graph_contains_required_node_names() -> None:
     graph = build_forecast_graph()
 
     assert set(REQUIRED_NODE_NAMES).issubset(set(graph.nodes))
+    assert {
+        "tool_ensure_market_data_freshness",
+        "tool_fetch_market_sentiment_inputs",
+        "tool_fetch_alt_data_inputs",
+        "tool_fetch_newsflow_inputs",
+        "tool_fetch_pizza_index_inputs",
+        "agent_market_sentiment_analysis",
+        "agent_alt_data_analysis",
+    }.issubset(set(graph.nodes))
+
+
+@pytest.mark.asyncio
+async def test_tool_ensure_market_data_freshness_triggers_backfill_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    async def fake_backfill(**kwargs: object) -> object:
+        calls.append(dict(kwargs))
+        return type("Result", (), {"status": "written", "failure_reason": None})()
+
+    monkeypatch.setattr("goldfxgraph.workflow.nodes.run_eod_backfill", fake_backfill)
+
+    state = WorkflowState(
+        settings=GoldFXGraphSettings(),
+        repository=ForecastRepository(create_session_factory("sqlite+aiosqlite:///:memory:")),
+        run_id=1,
+    )
+
+    result = await tool_ensure_market_data_freshness(state)
+
+    assert result is state
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_tool_ensure_market_data_freshness_raises_when_backfill_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_backfill(**kwargs: object) -> object:
+        return type(
+            "Result",
+            (),
+            {"status": "failed", "failure_reason": "TradingView history unavailable"},
+        )()
+
+    monkeypatch.setattr("goldfxgraph.workflow.nodes.run_eod_backfill", fake_backfill)
+
+    state = WorkflowState(
+        settings=GoldFXGraphSettings(),
+        repository=ForecastRepository(create_session_factory("sqlite+aiosqlite:///:memory:")),
+        run_id=1,
+    )
+
+    with pytest.raises(MarketDataFreshnessError, match="TradingView history unavailable"):
+        await tool_ensure_market_data_freshness(state)
+
+
+@pytest.mark.asyncio
+async def test_workflow_stops_before_market_data_loading_when_freshness_preflight_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_backfill(**kwargs: object) -> object:
+        return type(
+            "Result",
+            (),
+            {"status": "failed", "failure_reason": "TradingView history unavailable"},
+        )()
+
+    load_called = False
+
+    async def fake_load_market_data(state: WorkflowState) -> WorkflowState:
+        nonlocal load_called
+        load_called = True
+        return state
+
+    monkeypatch.setattr("goldfxgraph.workflow.nodes.run_eod_backfill", fake_backfill)
+    monkeypatch.setattr("goldfxgraph.workflow.graph.tool_load_market_data", fake_load_market_data)
+
+    graph = build_forecast_graph().compile()
+    state = WorkflowState(
+        settings=GoldFXGraphSettings(),
+        repository=ForecastRepository(create_session_factory("sqlite+aiosqlite:///:memory:")),
+        run_id=1,
+    )
+
+    with pytest.raises(MarketDataFreshnessError, match="TradingView history unavailable"):
+        await graph.ainvoke(state)
+
+    assert load_called is False
 
 
 def test_forecast_planning_output_is_structured() -> None:
@@ -65,6 +168,54 @@ def test_forecast_planning_output_is_structured() -> None:
     assert forecast.agent_votes
     assert forecast.risk_notes
     assert "不构成金融建议" in forecast.disclaimer
+
+
+def test_tool_fetch_current_gold_quote_uses_tradingview_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    bars = _bars()
+    expected_quote = CurrentQuote(
+        symbol="XAUUSD",
+        current_price=2051.75,
+        data_source="TradingView",
+        data_timestamp=datetime.now(UTC),
+    )
+    monkeypatch.setattr(
+        "goldfxgraph.workflow.nodes.CurrentQuoteProvider.fetch",
+        lambda self: expected_quote,
+    )
+
+    state = WorkflowState(
+        settings=GoldFXGraphSettings(),
+        latest_bar=bars[-1],
+        bars=bars,
+    )
+
+    result = tool_fetch_current_gold_quote(state)
+
+    assert result["quote"].data_source == "TradingView"
+    assert result["quote"].current_price == 2051.75
+    assert result["quote"].symbol == "XAUUSD"
+
+
+def test_tool_fetch_current_gold_quote_rejects_non_tradingview_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    bars = _bars()
+    monkeypatch.setattr(
+        "goldfxgraph.workflow.nodes.CurrentQuoteProvider.fetch",
+        lambda self: CurrentQuote(
+            symbol="XAUUSD",
+            current_price=2051.75,
+            data_source="legacy-quote-api",
+            data_timestamp=datetime.now(UTC),
+        ),
+    )
+
+    state = WorkflowState(
+        settings=GoldFXGraphSettings(),
+        latest_bar=bars[-1],
+        bars=bars,
+    )
+
+    with pytest.raises(QuoteProviderError, match="non-TradingView data source"):
+        tool_fetch_current_gold_quote(state)
 
 
 def test_agent_node_uses_configured_agent_api_without_leaking_key() -> None:
@@ -96,7 +247,14 @@ def test_agent_node_uses_configured_agent_api_without_leaking_key() -> None:
         openai_model="gpt-4.1-mini",
         openai_api_key=SecretStr("secret-token"),
     )
-    state = WorkflowState(settings=settings, agent_http_transport=httpx.MockTransport(handler))
+    state = WorkflowState(
+        settings=settings,
+        agent_http_transport=httpx.MockTransport(handler),
+        macro_inputs={
+            "dollar_index": {"status": "available"},
+            "real_rates": {"status": "available"},
+        },
+    )
 
     state = agent_macro_analysis(state)
 
@@ -115,12 +273,61 @@ def test_agent_node_uses_configured_agent_api_without_leaking_key() -> None:
     assert user_message["agent_name"] == "macro"
     assert user_message["payload"]["agent"] == "macro"
     assert user_message["payload"]["symbol"] == "XAUUSD"
+    assert user_message["payload"]["macro_inputs"]["dollar_index"]["status"] == "available"
+    assert user_message["payload"]["macro_inputs"]["real_rates"]["status"] == "available"
     agent_votes = state.get("agent_votes")
     assert state.get("macro_summary") == "远程宏观摘要：美元与实际利率压力偏空。"
     assert agent_votes is not None
     assert agent_votes[0].direction == ForecastDirection.bearish
     assert agent_votes[0].confidence == 0.62
     assert "secret-token" not in str(state)
+
+
+def test_macro_node_uses_real_macro_inputs_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    bars = _bars()
+    state = WorkflowState(
+        settings=GoldFXGraphSettings(
+            openai_base_url=None,
+            openai_model="gpt-4.1-mini",
+            openai_api_key=SecretStr("secret-token"),
+        ),
+        latest_bar=bars[-1],
+        quote=_quote(),
+        indicators=compute_technical_indicators(bars),
+    )
+
+    monkeypatch.setattr(
+        "goldfxgraph.workflow.nodes._fetch_dollar_index",
+        lambda transport: (
+            {
+                "status": "available",
+                "source": "fred",
+                "value": 104.32,
+                "change": -0.18,
+            },
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        "goldfxgraph.workflow.nodes._fetch_real_rates",
+        lambda transport: (
+            {
+                "status": "available",
+                "source": "fred",
+                "value": 2.45,
+                "change": -0.05,
+            },
+            None,
+        ),
+    )
+
+    state = tool_fetch_macro_inputs(state)
+    state = agent_macro_analysis(state)
+
+    assert state.get("unavailable_signals", []) == []
+    assert "美元指数 104.32" in state.get("macro_summary", "")
+    assert "实际利率 2.45%" in state.get("macro_summary", "")
+    assert state.get("macro_summary", "").startswith("宏观面围绕美元指数与实际利率解读")
 
 
 def test_agent_node_uses_deterministic_fallback_without_agent_api() -> None:
@@ -181,6 +388,34 @@ def test_agent_node_uses_deterministic_fallback_without_complete_openai_config()
     assert agent_votes[0].direction == ForecastDirection.bullish
 
 
+def test_agent_node_reports_placeholder_secret_as_unconfigured() -> None:
+    bars = _bars()
+    called = False
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal called
+        called = True
+        raise AssertionError("OpenAI-compatible client should not be called with placeholder key")
+
+    state = WorkflowState(
+        settings=GoldFXGraphSettings(
+            openai_base_url="https://agent.example.test/v1",
+            openai_model="gpt-4.1-mini",
+            openai_api_key=SecretStr("change_me"),
+        ),
+        latest_bar=bars[-1],
+        quote=_quote(),
+        indicators=compute_technical_indicators(bars),
+        agent_http_transport=httpx.MockTransport(handler),
+    )
+
+    state = agent_technical_analysis(state)
+
+    assert called is False
+    assert any("未配置有效 base_url/model/API Key" in note for note in state.get("risk_notes", []))
+    assert state.get("technical_summary", "").startswith("当前报价")
+
+
 def test_forecast_planning_aligns_direction_and_levels_with_agent_votes() -> None:
     bars = _bars()
     quote = _quote()
@@ -220,6 +455,32 @@ def test_forecast_planning_aligns_direction_and_levels_with_agent_votes() -> Non
     assert "防守或空头" in forecast.long_term_action
 
 
+def test_forecast_planning_includes_recent_feedback_history() -> None:
+    bars = _bars()
+    quote = _quote()
+    indicators = compute_technical_indicators(bars)
+    state = WorkflowState(
+        latest_bar=bars[-1],
+        quote=quote,
+        indicators=indicators,
+        agent_votes=[
+            AgentVote(agent="technical", direction=ForecastDirection.bullish, confidence=0.72, rationale="技术看多"),
+            AgentVote(agent="macro", direction=ForecastDirection.neutral, confidence=0.35, rationale="宏观中性"),
+        ],
+        technical_summary="技术看多",
+        macro_summary="宏观中性",
+        risk_summary="风险中性",
+        forecast_feedback_history=["最近一次看多后止损", "上一轮偏多但收益有限"],
+    )
+
+    state = agent_forecast_planning(state)
+    forecast = state.get("forecast")
+
+    assert forecast is not None
+    assert any("最近评估反馈" in note for note in forecast.risk_notes)
+    assert "最近评估反馈" in forecast.risk_summary
+
+
 def test_agent_node_falls_back_deterministically_when_openai_response_is_invalid() -> None:
     bars = _bars()
 
@@ -248,6 +509,259 @@ def test_agent_node_falls_back_deterministically_when_openai_response_is_invalid
     assert state.get("risk_notes") == [
         "OpenAI-compatible technical agent 调用失败，已回退到 deterministic workflow 输出。"
     ]
+
+
+def test_sentiment_and_alt_data_nodes_fallback_to_structured_summaries_without_openai() -> None:
+    bars = _bars()
+    quote = _quote()
+    state = WorkflowState(
+        settings=GoldFXGraphSettings(openai_base_url=None, openai_model=None),
+        latest_bar=bars[-1],
+        quote=quote,
+        indicators=compute_technical_indicators(bars),
+        forecast_feedback_history=["上一轮看多后回撤偏大"],
+    )
+
+    state = tool_fetch_market_sentiment_inputs(state)
+    state = tool_fetch_alt_data_inputs(state)
+    state = agent_market_sentiment_analysis(state)
+    state = agent_alt_data_analysis(state)
+
+    assert state.get("market_sentiment_summary", "").startswith("市场情绪按")
+    assert "披萨指数" in state.get("alt_data_summary", "")
+    assert state.get("market_sentiment_votes")
+    assert state.get("alt_data_votes")
+    assert any(vote.agent == "market_sentiment" for vote in state.get("agent_votes", []))
+    assert any(vote.agent == "alt_data" for vote in state.get("agent_votes", []))
+
+
+def test_sentiment_and_alt_data_nodes_use_external_signals_when_available() -> None:
+    bars = _bars()
+    quote = _quote()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "DTWEXBGS" in url:
+            return httpx.Response(
+                200,
+                text="observation_date,DTWEXBGS\n2026-05-23,98.1254\n2026-05-22,98.0345\n",
+                request=request,
+            )
+        if "DFII10" in url:
+            return httpx.Response(
+                200,
+                text="observation_date,DFII10\n2026-05-23,2.145\n2026-05-22,2.158\n",
+                request=request,
+            )
+        if request.url.host == "publicreporting.cftc.gov":
+            return httpx.Response(
+                200,
+                text=(
+                    '"report_date_as_yyyy_mm_dd","commodity_name","open_interest_all",'
+                    '"noncomm_positions_long_all","noncomm_positions_short_all",'
+                    '"comm_positions_long_all","comm_positions_short_all"\n'
+                    '"2026-05-19T00:00:00.000","GOLD","379325","211018","51185","69520","261149"\n'
+                    '"2026-05-12T00:00:00.000","GOLD","378000","209000","53000","69000","260000"\n'
+                ),
+                request=request,
+            )
+        raise AssertionError(f"unexpected request url: {request.url}")
+
+    state = WorkflowState(
+        settings=GoldFXGraphSettings(openai_base_url=None, openai_model=None),
+        latest_bar=bars[-1],
+        quote=quote,
+        indicators=compute_technical_indicators(bars),
+        forecast_feedback_history=["上一轮看多后回撤偏大"],
+        signal_http_transport=httpx.MockTransport(handler),
+    )
+
+    state = tool_fetch_market_sentiment_inputs(state)
+    state = tool_fetch_alt_data_inputs(state)
+    state = agent_market_sentiment_analysis(state)
+    state = agent_alt_data_analysis(state)
+
+    unavailable = state.get("unavailable_signals", [])
+    assert "cftc_commitments" not in unavailable
+    assert "positioning" in state["market_sentiment_inputs"]["available_signals"]
+    assert state["market_sentiment_inputs"]["cftc_commitments"]["net_noncommercial"] == 159833
+    assert state["market_sentiment_inputs"]["cftc_commitments"]["positioning_bias"] == "bullish"
+    assert state["alt_data_inputs"]["dollar_index"]["status"] == "available"
+    assert state["alt_data_inputs"]["real_rates"]["status"] == "available"
+    assert "美元指数" in state["alt_data_summary"]
+    assert "实际利率" in state["alt_data_summary"]
+    assert "CFTC" in state["market_sentiment_summary"] or "净多头" in state["market_sentiment_summary"]
+
+
+def test_newsflow_node_uses_mainstream_media_rss_when_available() -> None:
+    bars = _bars()
+    quote = _quote()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "cnbc.com" in url:
+            return httpx.Response(
+                200,
+                text=(
+                    "<?xml version='1.0' encoding='UTF-8'?>"
+                    "<rss version='2.0'><channel><title>CNBC</title>"
+                    "<item><title>Gold edges higher as Fed cut bets firm</title>"
+                    "<link>https://example.com/cnbc-1</link>"
+                    "<pubDate>Mon, 20 May 2026 12:00:00 GMT</pubDate></item>"
+                    "<item><title>Dollar slips on softer inflation data</title>"
+                    "<link>https://example.com/cnbc-2</link>"
+                    "<pubDate>Mon, 20 May 2026 13:00:00 GMT</pubDate></item>"
+                    "</channel></rss>"
+                ),
+                request=request,
+            )
+        if "marketwatch.com" in url:
+            return httpx.Response(
+                200,
+                text=(
+                    "<?xml version='1.0' encoding='UTF-8'?>"
+                    "<rss version='2.0'><channel><title>MarketWatch</title>"
+                    "<item><title>Gold prices rebound as traders watch rates</title>"
+                    "<link>https://example.com/mw-1</link>"
+                    "<pubDate>Mon, 20 May 2026 14:00:00 GMT</pubDate></item>"
+                    "</channel></rss>"
+                ),
+                request=request,
+            )
+        if "news.google.com" in url:
+            return httpx.Response(
+                200,
+                text=(
+                    "<?xml version='1.0' encoding='UTF-8'?>"
+                    "<rss version='2.0'><channel><title>Google News</title>"
+                    "<item><title>Reuters: Gold holds near record highs</title>"
+                    "<link>https://example.com/gn-1</link>"
+                    "<source>Reuters</source>"
+                    "<pubDate>Mon, 20 May 2026 15:00:00 GMT</pubDate></item>"
+                    "</channel></rss>"
+                ),
+                request=request,
+            )
+        raise AssertionError(f"unexpected request url: {request.url}")
+
+    state = WorkflowState(
+        settings=GoldFXGraphSettings(openai_base_url=None, openai_model=None),
+        latest_bar=bars[-1],
+        quote=quote,
+        indicators=compute_technical_indicators(bars),
+        signal_http_transport=httpx.MockTransport(handler),
+    )
+
+    state = tool_fetch_newsflow_inputs(state)
+    state = agent_news_analysis(state)
+
+    newsflow_inputs = state.get("newsflow_inputs")
+    assert newsflow_inputs is not None
+    assert newsflow_inputs["status"] == "available"
+    assert newsflow_inputs["headline_count"] >= 3
+    assert "newsflow" not in state.get("unavailable_signals", [])
+    assert "新闻流已从" in state.get("news_summary", "")
+    assert "美联储" in state.get("news_summary", "")
+    assert "黄金" in state.get("news_summary", "")
+
+
+def test_pizza_index_node_uses_public_dashboard_snapshot_when_available() -> None:
+    bars = _bars()
+    quote = _quote()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "pizzint.watch" in url:
+            return httpx.Response(
+                200,
+                text=(
+                    "<!doctype html><html><body>"
+                    "<div class='text-4xl sm:text-5xl lg:text-6xl font-bold "
+                    "text-yellow-400 leading-none -mb-1'>DOUGHCON 3</div>"
+                    "<div class='text-xs sm:text-sm text-yellow-400 opacity-80 "
+                    "leading-tight flex flex-wrap items-center gap-1'>"
+                    "<span>ROUND HOUSE</span><span class='opacity-60'>•</span>"
+                    "<span>INCREASE IN FORCE READINESS</span></div>"
+                    "<div data-place-id='ChIJI6ACK7q2t4kRFcPtFhUuYhU'>"
+                    "<h3>DOMINO&#x27;S PIZZA</h3>"
+                    "<span class='text-red-300 font-bold'>178<!-- -->% SPIKE</span>"
+                    "<div class='text-xs text-gray-400 font-mono'>1.4 mi</div></div>"
+                    "<div data-place-id='ChIJcYireCe3t4kR4d9trEbGYjc'>"
+                    "<h3>EXTREME PIZZA</h3>"
+                    "<span class='text-red-300 font-bold'>270<!-- -->% SPIKE</span>"
+                    "<div class='text-xs text-gray-400 font-mono'>1.0 mi</div></div>"
+                    "</body></html>"
+                ),
+                request=request,
+            )
+        if "DTWEXBGS" in url:
+            return httpx.Response(
+                200,
+                text="observation_date,DTWEXBGS\n2026-05-23,98.1254\n2026-05-22,98.0345\n",
+                request=request,
+            )
+        if "DFII10" in url:
+            return httpx.Response(
+                200,
+                text="observation_date,DFII10\n2026-05-23,2.145\n2026-05-22,2.158\n",
+                request=request,
+            )
+        raise AssertionError(f"unexpected request url: {request.url}")
+
+    state = WorkflowState(
+        settings=GoldFXGraphSettings(openai_base_url=None, openai_model=None),
+        latest_bar=bars[-1],
+        quote=quote,
+        indicators=compute_technical_indicators(bars),
+        signal_http_transport=httpx.MockTransport(handler),
+    )
+
+    state = tool_fetch_pizza_index_inputs(state)
+    state = tool_fetch_alt_data_inputs(state)
+    state = agent_alt_data_analysis(state)
+
+    pizza_index_inputs = state.get("pizza_index_inputs")
+    assert pizza_index_inputs is not None
+    assert pizza_index_inputs["status"] == "available"
+    assert pizza_index_inputs["doughcon_level"] == 3
+    assert pizza_index_inputs["source_count"] == 2
+    assert pizza_index_inputs["top_locations"][0]["name"] == "EXTREME PIZZA"
+    assert pizza_index_inputs["top_locations"][0]["spike_pct"] == 270
+    assert "pizza_index" not in state.get("unavailable_signals", [])
+    assert "五角大楼披萨指数" in state.get("alt_data_summary", "")
+    assert state.get("alt_data_summary", "").splitlines()[0] == "另类数据维度以保守处理为主。"
+
+
+def test_market_sentiment_agent_ignores_blank_remote_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+    bars = _bars()
+    quote = _quote()
+    state = WorkflowState(
+        settings=GoldFXGraphSettings(
+            openai_base_url="https://agent.example.test/v1",
+            openai_model="gpt-4.1-mini",
+            openai_api_key=SecretStr("secret-token"),
+        ),
+        latest_bar=bars[-1],
+        quote=quote,
+        indicators=compute_technical_indicators(bars),
+        forecast_feedback_history=["上一轮看多后回撤偏大"],
+    )
+
+    monkeypatch.setattr(
+        "goldfxgraph.llm.openai_client.OpenAIAgentClient.invoke_agent",
+        lambda self, agent_name, payload: OpenAIAgentResult(
+            summary="   ",
+            direction=ForecastDirection.neutral,
+            confidence=0.52,
+            risk_notes=[],
+        ),
+    )
+
+    state = tool_fetch_market_sentiment_inputs(state)
+    state = agent_market_sentiment_analysis(state)
+
+    assert state.get("market_sentiment_summary", "").startswith("市场情绪按")
+    assert state["market_sentiment_summary"].strip() != ""
 
 
 def test_forecast_planning_carries_remote_agent_fallback_diagnostics_into_risk_notes() -> None:

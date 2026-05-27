@@ -105,7 +105,7 @@ def test_openai_client_rejects_invalid_structured_payload() -> None:
 
 def test_openai_client_wraps_http_errors() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(503, json={"error": "service unavailable"}, request=request)
+        return httpx.Response(400, json={"error": {"message": "Authorization is wrong"}}, request=request)
 
     client = OpenAIAgentClient(
         base_url="https://api.zhizengzeng.com/v1",
@@ -114,7 +114,7 @@ def test_openai_client_wraps_http_errors() -> None:
         transport=httpx.MockTransport(handler),
     )
 
-    with pytest.raises(OpenAIClientError, match="request failed for technical"):
+    with pytest.raises(OpenAIClientError, match="HTTP 400"):
         client.invoke_agent("technical", {"symbol": "XAUUSD"})
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -29,3 +30,21 @@ async def init_models(engine: AsyncEngine) -> None:
 
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
+        await connection.run_sync(_ensure_forecast_columns)
+
+
+def _ensure_forecast_columns(connection) -> None:
+    inspector = inspect(connection)
+    if "forecasts" not in inspector.get_table_names():
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("forecasts")}
+    required_columns = {
+        "market_sentiment_summary": "TEXT",
+        "alt_data_summary": "TEXT",
+    }
+
+    for column_name, column_type in required_columns.items():
+        if column_name in existing_columns:
+            continue
+        connection.execute(text(f'ALTER TABLE forecasts ADD COLUMN "{column_name}" {column_type}'))
