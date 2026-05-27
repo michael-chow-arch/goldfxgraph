@@ -98,10 +98,33 @@ class ForecastResult(BaseModel):
     technical_summary: str
     macro_summary: str | None = None
     news_summary: str | None = None
+    market_sentiment_summary: str | None = None
+    alt_data_summary: str | None = None
     risk_summary: str
     agent_votes: list[AgentVote] = Field(default_factory=list)
     risk_notes: list[str] = Field(default_factory=list)
     disclaimer: str = "本结果仅用于研究和决策支持，不构成金融建议、投资建议或交易指令。"
+
+
+class ForecastEvaluationResult(BaseModel):
+    id: int | None = None
+    forecast_id: int
+    run_id: int
+    evaluated_at: datetime
+    evaluation_window_end: datetime
+    result: str
+    direction_hit: bool
+    pnl_points: float
+    settlement_price: float
+    summary: str
+    feedback_notes: list[str] = Field(default_factory=list)
+    signal_coverage: dict[str, Any] = Field(default_factory=dict)
+
+
+class ForecastHistoryItem(BaseModel):
+    forecast: ForecastResult
+    evaluation: ForecastEvaluationResult | None = None
+    trading_day: date | None = None
 
 
 class ResearchRunResult(BaseModel):
@@ -112,3 +135,4 @@ class ResearchRunResult(BaseModel):
     input_summary: dict[str, Any] = Field(default_factory=dict)
     error_message: str | None = None
     forecast: ForecastResult | None = None
+    evaluation: ForecastEvaluationResult | None = None

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from pathlib import Path
+from datetime import UTC, date, datetime
 from typing import Any, Protocol, TypedDict
 
 import httpx
@@ -9,8 +8,21 @@ from pydantic import BaseModel, Field
 
 from goldfxgraph.indicators.technical import compute_technical_indicators
 from goldfxgraph.llm.openai_client import OpenAIAgentClient, OpenAIClientError
-from goldfxgraph.market_data.csv_loader import load_xauusd_daily_csv
-from goldfxgraph.market_data.current_quote import CurrentQuoteProvider
+from goldfxgraph.market_data.current_quote import CurrentQuoteProvider, QuoteProviderError
+from goldfxgraph.market_data.external_signals import (
+    ExternalSignalError,
+    fetch_cftc_gold_commitments,
+    fetch_dollar_index,
+    fetch_real_rates,
+)
+from goldfxgraph.market_data.newsflow import (
+    NewsflowError,
+    fetch_newsflow,
+    translate_headline_to_chinese,
+    translate_source_name_to_chinese,
+)
+from goldfxgraph.market_data.pizza_index import PizzaIndexError, fetch_pizza_index
+from goldfxgraph.market_data.tradingview_quote import DEFAULT_TRADINGVIEW_SOURCE
 from goldfxgraph.packages.common.settings import GoldFXGraphSettings, get_settings
 from goldfxgraph.persistence.repositories import ForecastRepository
 from goldfxgraph.schemas.forecast import (
@@ -18,21 +30,28 @@ from goldfxgraph.schemas.forecast import (
     CurrentQuote,
     DailyBar,
     ForecastDirection,
+    ForecastEvaluationResult,
     ForecastResult,
     MarketDataSet,
     TechnicalIndicators,
 )
+
+run_eod_backfill = None
 
 
 class QuoteProvider(Protocol):
     def fetch(self) -> CurrentQuote: ...
 
 
+class MarketDataFreshnessError(ValueError):
+    """市场数据强校验失败的受控异常。"""
+
+
 class WorkflowState(TypedDict, total=False):
     settings: GoldFXGraphSettings
-    csv_path: Path | str
     quote_provider: QuoteProvider
     agent_http_transport: httpx.BaseTransport
+    signal_http_transport: httpx.BaseTransport
     repository: ForecastRepository
     market_data: MarketDataSet
     bars: list[DailyBar]
@@ -40,11 +59,23 @@ class WorkflowState(TypedDict, total=False):
     quote: CurrentQuote
     indicators: TechnicalIndicators
     technical_summary: str
+    macro_inputs: dict[str, object]
     macro_summary: str
     news_summary: str
+    market_sentiment_summary: str
+    alt_data_summary: str
+    newsflow_inputs: dict[str, object]
+    pizza_index_inputs: dict[str, object]
     risk_summary: str
     agent_votes: list[AgentVote]
     risk_notes: list[str]
+    forecast_feedback_history: list[str]
+    market_sentiment_inputs: dict[str, object]
+    alt_data_inputs: dict[str, object]
+    market_sentiment_votes: list[AgentVote]
+    alt_data_votes: list[AgentVote]
+    unavailable_signals: list[str]
+    forecast_evaluation: ForecastEvaluationResult
     forecast: ForecastResult
     run_id: int
     persistence_status: str
@@ -62,6 +93,329 @@ class AgentApiResponse(BaseModel):
     risk_notes: list[str] = Field(default_factory=list)
 
 
+def evaluate_forecast_performance(
+    forecast: ForecastResult,
+    settlement_bar: DailyBar,
+    *,
+    evaluated_at: datetime | None = None,
+) -> ForecastEvaluationResult:
+    if forecast.id is None or forecast.run_id is None:
+        raise ValueError("forecast id and run_id are required for evaluation")
+    if forecast.entry_price is None:
+        raise ValueError("forecast entry_price is required for evaluation")
+
+    evaluated_at = evaluated_at or datetime.now(UTC)
+    settlement_price = settlement_bar.close
+    direction_hit = False
+    result = "flat"
+    pnl_points = 0.0
+    feedback_notes = [
+        f"使用 {settlement_bar.date.isoformat()} 的日线收盘 bar 进行复盘。",
+    ]
+
+    if forecast.direction == ForecastDirection.bullish:
+        pnl_points, settlement_price, result, direction_hit = _evaluate_bullish_forecast(forecast, settlement_bar)
+    elif forecast.direction == ForecastDirection.bearish:
+        pnl_points, settlement_price, result, direction_hit = _evaluate_bearish_forecast(forecast, settlement_bar)
+    else:
+        entry = forecast.entry_price or forecast.current_price
+        pnl_points = round(settlement_bar.close - entry, 2)
+        settlement_price = settlement_bar.close
+        result = "flat"
+        direction_hit = False
+        feedback_notes.append("中性预测按研究持有基准计算结算差值，用于观察市场实际波动。")
+
+    feedback_notes.append(
+        f"结算结果：{_evaluation_result_label(result)}，收益点数 {pnl_points:+.2f}，结算价 {settlement_price:.2f}。"
+    )
+
+    return ForecastEvaluationResult(
+        forecast_id=forecast.id,
+        run_id=forecast.run_id,
+        evaluated_at=evaluated_at,
+        evaluation_window_end=datetime(
+            settlement_bar.date.year,
+            settlement_bar.date.month,
+            settlement_bar.date.day,
+            23,
+            59,
+            59,
+            tzinfo=UTC,
+        ),
+        result=result,
+        direction_hit=direction_hit,
+        pnl_points=pnl_points,
+        settlement_price=settlement_price,
+        summary="；".join(feedback_notes),
+        feedback_notes=feedback_notes,
+        signal_coverage={
+            "settlement_date": settlement_bar.date.isoformat(),
+            "settlement_source": settlement_bar.source or forecast.data_source,
+            "bar_high": settlement_bar.high,
+            "bar_low": settlement_bar.low,
+        },
+    )
+
+async def tool_load_forecast_feedback_history(state: WorkflowState) -> WorkflowState:
+    repository = state.get("repository")
+    if repository is None:
+        return {**state, "forecast_feedback_history": []}
+
+    limit = int(state.get("feedback_history_limit") or 5)
+    history = await repository.get_latest_evaluation_summary(limit=limit)
+    return {**state, "forecast_feedback_history": history}
+
+
+def tool_fetch_market_sentiment_inputs(state: WorkflowState) -> WorkflowState:
+    latest_bar = _required(state, "latest_bar")
+    quote = _required(state, "quote")
+    indicators = _required(state, "indicators")
+    feedback_history = state.get("forecast_feedback_history", [])
+    signal_transport = state.get("signal_http_transport")
+
+    trend_bias = _direction_from_inputs(quote.current_price, latest_bar, indicators)
+    cftc_commitments, _ = _fetch_cftc_commitments(signal_transport)
+    newsflow_inputs = state.get("newsflow_inputs") or {}
+    unavailable_signals = list(state.get("unavailable_signals") or [])
+    if newsflow_inputs.get("status") != "available":
+        unavailable_signals.append("newsflow")
+    if cftc_commitments.get("status") != "available":
+        unavailable_signals.extend(["positioning", "cftc_commitments"])
+    unavailable_signals = _unique_strings([str(item) for item in unavailable_signals])
+    available_signals = [
+        "price_action",
+        "technical_indicators",
+        "recent_evaluation_feedback",
+    ]
+    if cftc_commitments.get("status") == "available":
+        available_signals.extend(["cftc_commitments", "positioning"])
+    if newsflow_inputs.get("status") == "available":
+        available_signals.append("newsflow")
+    inputs = {
+        "trend_bias": trend_bias.value,
+        "current_price": round(quote.current_price, 4),
+        "latest_close": latest_bar.close,
+        "rsi_14": indicators.rsi_14,
+        "feedback_history": list(feedback_history[:5]),
+        "feedback_signal_count": len(feedback_history),
+        "cftc_commitments": cftc_commitments,
+        "positioning_bias": cftc_commitments.get("positioning_bias"),
+        "newsflow_headline_count": int(newsflow_inputs.get("headline_count") or 0),
+        "newsflow_sentiment": newsflow_inputs.get("sentiment"),
+        "newsflow_topics": list(newsflow_inputs.get("topics") or []),
+        "available_signals": available_signals,
+        "unavailable_signals": unavailable_signals,
+    }
+    return {
+        **state,
+        "market_sentiment_inputs": inputs,
+        "unavailable_signals": unavailable_signals,
+    }
+
+
+def tool_fetch_alt_data_inputs(state: WorkflowState) -> WorkflowState:
+    latest_bar = _required(state, "latest_bar")
+    quote = _required(state, "quote")
+    signal_transport = state.get("signal_http_transport")
+    pizza_index = state.get("pizza_index_inputs") or {}
+    dollar_index, _ = _fetch_dollar_index(signal_transport)
+    real_rates, _ = _fetch_real_rates(signal_transport)
+    unavailable_signals = list(state.get("unavailable_signals") or [])
+    if pizza_index.get("status") != "available":
+        unavailable_signals.append("pizza_index")
+    if dollar_index.get("status") != "available":
+        unavailable_signals.append("dollar_index")
+    if real_rates.get("status") != "available":
+        unavailable_signals.append("real_rates")
+    unavailable_signals = _unique_strings([str(item) for item in unavailable_signals])
+    inputs = {
+        "source_status": _external_source_status([pizza_index, dollar_index, real_rates]),
+        "pizza_index": pizza_index
+        if pizza_index
+        else {
+            "status": "unavailable",
+            "source": "pizzint.watch",
+            "summary": "五角大楼披萨指数暂无已接入的可靠实时源，本轮仅保留可审计的 unavailable 标记。",
+        },
+        "dollar_index": dollar_index,
+        "real_rates": real_rates,
+        "price_context": {
+            "current_price": quote.current_price,
+            "latest_close": latest_bar.close,
+            "daily_range": latest_bar.high - latest_bar.low,
+        },
+        "available_signals": [
+            signal_name
+            for signal_name, signal in (
+                ("pizza_index", pizza_index),
+                ("dollar_index", dollar_index),
+                ("real_rates", real_rates),
+            )
+            if signal.get("status") == "available"
+        ],
+        "unavailable_signals": unavailable_signals,
+    }
+    return {
+        **state,
+        "alt_data_inputs": inputs,
+        "unavailable_signals": unavailable_signals,
+    }
+
+
+def tool_fetch_newsflow_inputs(state: WorkflowState) -> WorkflowState:
+    signal_transport = state.get("signal_http_transport")
+    try:
+        newsflow_inputs = fetch_newsflow(signal_transport)
+    except (NewsflowError, httpx.HTTPError, ValueError, TypeError) as exc:
+        newsflow_inputs = {
+            "status": "unavailable",
+            "source": "mainstream-rss",
+            "headline_count": 0,
+            "source_count": 0,
+            "headlines": [],
+            "top_headlines": [],
+            "sentiment": "neutral",
+            "sentiment_score": 0,
+            "summary": "新闻流暂不可用，当前没有抓取到可验证的主流媒体标题。",
+            "feed_statuses": [],
+            "error": str(exc),
+        }
+
+    unavailable_signals = list(state.get("unavailable_signals") or [])
+    if newsflow_inputs.get("status") != "available":
+        unavailable_signals.append("newsflow")
+    unavailable_signals = _unique_strings([str(item) for item in unavailable_signals])
+    return {
+        **state,
+        "newsflow_inputs": newsflow_inputs,
+        "unavailable_signals": unavailable_signals,
+    }
+
+
+def tool_fetch_pizza_index_inputs(state: WorkflowState) -> WorkflowState:
+    signal_transport = state.get("signal_http_transport")
+    try:
+        pizza_index_inputs = fetch_pizza_index(signal_transport)
+    except (PizzaIndexError, httpx.HTTPError, ValueError, TypeError) as exc:
+        pizza_index_inputs = {
+            "status": "unavailable",
+            "source": "pizzint.watch",
+            "url": "https://www.pizzint.watch/",
+            "doughcon_level": None,
+            "doughcon_label": None,
+            "doughcon_description": None,
+            "source_count": 0,
+            "average_spike_pct": None,
+            "max_spike_pct": None,
+            "pizza_index_score": None,
+            "activity_bias": "neutral",
+            "top_locations": [],
+            "summary": "Pentagon Pizza Index 暂不可用，当前没有抓取到可验证的公开活跃度数据。",
+            "error": str(exc),
+        }
+
+    unavailable_signals = list(state.get("unavailable_signals") or [])
+    if pizza_index_inputs.get("status") == "unavailable":
+        unavailable_signals.append("pizza_index")
+    unavailable_signals = _unique_strings([str(item) for item in unavailable_signals])
+    return {
+        **state,
+        "pizza_index_inputs": pizza_index_inputs,
+        "unavailable_signals": unavailable_signals,
+    }
+
+
+def agent_market_sentiment_analysis(state: WorkflowState) -> WorkflowState:
+    inputs = state.get("market_sentiment_inputs", {})
+    remote, diagnostic = _remote_agent_response(state, "market_sentiment")
+    summary = _summary_or_fallback(remote.summary if remote else None, _market_sentiment_summary(inputs))
+    direction = remote.direction if remote else _market_sentiment_direction(inputs)
+    confidence = remote.confidence if remote else _market_sentiment_confidence(inputs, direction)
+    vote = AgentVote(
+        agent="market_sentiment",
+        direction=direction,
+        confidence=confidence,
+        rationale=summary,
+    )
+    return {
+        **state,
+        "market_sentiment_summary": summary,
+        "market_sentiment_votes": [vote],
+        "risk_notes": _append_note(state.get("risk_notes"), diagnostic),
+        "agent_votes": [*_existing_votes_without(state, "market_sentiment"), vote],
+    }
+
+
+def agent_alt_data_analysis(state: WorkflowState) -> WorkflowState:
+    inputs = state.get("alt_data_inputs", {})
+    remote, diagnostic = _remote_agent_response(state, "alt_data")
+    summary = _summary_or_fallback(remote.summary if remote else None, _alt_data_summary(inputs))
+    direction = remote.direction if remote else ForecastDirection.neutral
+    confidence = remote.confidence if remote else 0.3
+    vote = AgentVote(
+        agent="alt_data",
+        direction=direction,
+        confidence=confidence,
+        rationale=summary,
+    )
+    return {
+        **state,
+        "alt_data_summary": summary,
+        "alt_data_votes": [vote],
+        "risk_notes": _append_note(state.get("risk_notes"), diagnostic),
+        "agent_votes": [*_existing_votes_without(state, "alt_data"), vote],
+    }
+
+
+def _evaluate_bullish_forecast(forecast: ForecastResult, settlement_bar: DailyBar) -> tuple[float, float, str, bool]:
+    entry = forecast.entry_price or forecast.current_price
+    take_profit = forecast.take_profit_price or entry
+    stop_loss = forecast.stop_loss_price or entry
+
+    tp_hit = settlement_bar.high >= take_profit
+    sl_hit = settlement_bar.low <= stop_loss
+
+    if tp_hit and sl_hit:
+        return round(stop_loss - entry, 2), stop_loss, "loss", False
+    if tp_hit:
+        return round(take_profit - entry, 2), take_profit, "win", True
+    if sl_hit:
+        return round(stop_loss - entry, 2), stop_loss, "loss", False
+
+    pnl_points = round(settlement_bar.close - entry, 2)
+    direction_hit = settlement_bar.close >= entry
+    return pnl_points, settlement_bar.close, "flat", direction_hit
+
+
+def _evaluate_bearish_forecast(forecast: ForecastResult, settlement_bar: DailyBar) -> tuple[float, float, str, bool]:
+    entry = forecast.entry_price or forecast.current_price
+    take_profit = forecast.take_profit_price or entry
+    stop_loss = forecast.stop_loss_price or entry
+
+    tp_hit = settlement_bar.low <= take_profit
+    sl_hit = settlement_bar.high >= stop_loss
+
+    if tp_hit and sl_hit:
+        return round(entry - stop_loss, 2), stop_loss, "loss", False
+    if tp_hit:
+        return round(entry - take_profit, 2), take_profit, "win", True
+    if sl_hit:
+        return round(entry - stop_loss, 2), stop_loss, "loss", False
+
+    pnl_points = round(entry - settlement_bar.close, 2)
+    direction_hit = settlement_bar.close <= entry
+    return pnl_points, settlement_bar.close, "flat", direction_hit
+
+
+def _evaluation_result_label(result: str) -> str:
+    labels = {
+        "win": "命中止盈",
+        "loss": "触发止损",
+        "flat": "持平/区间",
+    }
+    return labels.get(result, result)
+
+
 def create_research_forecast_from_inputs(
     latest_bar: DailyBar,
     quote: CurrentQuote,
@@ -72,8 +426,26 @@ def create_research_forecast_from_inputs(
     direction = _direction_from_inputs(price, latest_bar, indicators)
     entry_price, take_profit_price, stop_loss_price = _research_levels(price, atr, direction)
     technical_summary = _technical_summary(price, latest_bar, indicators, direction)
-    macro_summary = "宏观信息未接入外部实时数据源，本轮仅记录为中性背景，等待后续 API 层补充可验证来源。"
+    macro_summary = _macro_summary(
+        {
+            "current_price": round(price, 4),
+            "latest_close": latest_bar.close,
+            "sma_20": indicators.sma_20,
+            "ema_12": indicators.ema_12,
+            "dollar_index": {"status": "unavailable"},
+            "real_rates": {"status": "unavailable"},
+            "available_signals": ["price_action", "technical_indicators"],
+            "unavailable_signals": ["dollar_index", "real_rates"],
+        }
+    )
     news_summary = "新闻信息未接入外部实时数据源，本轮不使用未经验证的新闻假设影响方向判断。"
+    market_sentiment_summary = "市场情绪暂未接入外部实时源，当前按价格结构、RSI 和历史反馈回放推导为中性偏谨慎。"
+    alt_data_summary = (
+        "另类数据维度以保守处理为主。\n"
+        "- 五角大楼披萨指数暂无可靠实时源，本轮标记为 unavailable。\n"
+        "- 美元指数和实际利率若不可用，将在后续研究中单独提示。\n"
+        "- 本轮仅用于风险提示，不作为方向依据。"
+    )
     risk_notes = _risk_notes(latest_bar, indicators, atr)
     risk_summary = "风险评估基于 ATR、日内区间和指标可用性生成，建议仅作为研究参考并控制仓位暴露。"
     agent_votes = [
@@ -94,6 +466,18 @@ def create_research_forecast_from_inputs(
             direction=ForecastDirection.neutral,
             confidence=0.35,
             rationale=news_summary,
+        ),
+        AgentVote(
+            agent="market_sentiment",
+            direction=ForecastDirection.neutral,
+            confidence=0.4,
+            rationale=market_sentiment_summary,
+        ),
+        AgentVote(
+            agent="alt_data",
+            direction=ForecastDirection.neutral,
+            confidence=0.3,
+            rationale=alt_data_summary,
         ),
         AgentVote(
             agent="risk",
@@ -124,6 +508,8 @@ def create_research_forecast_from_inputs(
         technical_summary=technical_summary,
         macro_summary=macro_summary,
         news_summary=news_summary,
+        market_sentiment_summary=market_sentiment_summary,
+        alt_data_summary=alt_data_summary,
         risk_summary=risk_summary,
         agent_votes=agent_votes,
         risk_notes=risk_notes,
@@ -137,20 +523,51 @@ def router_validate_request(state: WorkflowState) -> WorkflowState:
     return state
 
 
-def tool_load_market_data(state: WorkflowState) -> WorkflowState:
+async def tool_load_market_data(state: WorkflowState) -> WorkflowState:
     if "market_data" in state and "latest_bar" in state and "bars" in state:
         return state
 
+    repository = state.get("repository")
+    if repository is None:
+        raise ValueError("workflow state missing repository for market data loading")
+
     settings = state.get("settings") or get_settings()
-    csv_path = Path(state.get("csv_path") or settings.xauusd_csv_path)
-    market_data = load_xauusd_daily_csv(csv_path)
+    symbol = "XAUUSD"
+    latest_bar = await repository.get_latest_market_bar(symbol)
+    if latest_bar is None:
+        raise ValueError("market data repository does not contain any persisted daily bars")
+
+    bars = await repository.get_market_bars_between(symbol, date(1970, 1, 1), latest_bar.date)
+    market_data = MarketDataSet(symbol=latest_bar.symbol, bars=bars, latest_bar=latest_bar)
     return {
         **state,
         "settings": settings,
         "market_data": market_data,
-        "bars": market_data.bars,
-        "latest_bar": market_data.latest_bar,
+        "bars": bars,
+        "latest_bar": latest_bar,
     }
+
+
+async def tool_ensure_market_data_freshness(state: WorkflowState) -> WorkflowState:
+    repository = state.get("repository")
+    if repository is None:
+        raise ValueError("workflow state missing repository for market data freshness preflight")
+
+    settings = state.get("settings") or get_settings()
+    backfill_runner = run_eod_backfill
+    if backfill_runner is None:
+        from goldfxgraph.backfill.eod_backfill import run_eod_backfill as backfill_runner  # type: ignore[no-redef]
+
+    result = await backfill_runner(
+        settings=settings,
+        repository=repository,
+        now=datetime.now(UTC),
+    )
+    if result.status == "failed":
+        raise MarketDataFreshnessError(
+            f"market data freshness check failed: {result.failure_reason or 'unknown failure'}"
+        )
+    return state
 
 
 def tool_fetch_current_gold_quote(state: WorkflowState) -> WorkflowState:
@@ -162,11 +579,19 @@ def tool_fetch_current_gold_quote(state: WorkflowState) -> WorkflowState:
         settings = state.get("settings") or get_settings()
         provider = CurrentQuoteProvider(
             url=settings.current_quote_url,
-            api_key=settings.current_quote_api_key.get_secret_value() if settings.current_quote_api_key else None,
         )
 
     quote = provider.fetch()
+    quote = _require_tradingview_quote(quote)
     return {**state, "quote": quote}
+
+
+def _require_tradingview_quote(quote: CurrentQuote) -> CurrentQuote:
+    if quote.data_source.strip().lower() != DEFAULT_TRADINGVIEW_SOURCE.lower():
+        raise QuoteProviderError("TradingView quote provider returned a non-TradingView data source")
+    if quote.data_source != DEFAULT_TRADINGVIEW_SOURCE:
+        quote = quote.model_copy(update={"data_source": DEFAULT_TRADINGVIEW_SOURCE})
+    return quote
 
 
 def tool_compute_indicators(state: WorkflowState) -> WorkflowState:
@@ -183,6 +608,41 @@ def tool_compute_indicators(state: WorkflowState) -> WorkflowState:
     return {**state, "indicators": compute_technical_indicators(bars)}
 
 
+def tool_fetch_macro_inputs(state: WorkflowState) -> WorkflowState:
+    latest_bar = _required(state, "latest_bar")
+    quote = _required(state, "quote")
+    indicators = _required(state, "indicators")
+    signal_transport = state.get("signal_http_transport")
+    dollar_index, _ = _fetch_dollar_index(signal_transport)
+    real_rates, _ = _fetch_real_rates(signal_transport)
+    unavailable_signals = list(state.get("unavailable_signals") or [])
+    if dollar_index.get("status") != "available":
+        unavailable_signals.append("dollar_index")
+    if real_rates.get("status") != "available":
+        unavailable_signals.append("real_rates")
+    unavailable_signals = _unique_strings([str(item) for item in unavailable_signals])
+    available_signals = ["price_action", "technical_indicators"]
+    if dollar_index.get("status") == "available":
+        available_signals.append("dollar_index")
+    if real_rates.get("status") == "available":
+        available_signals.append("real_rates")
+    inputs = {
+        "current_price": round(quote.current_price, 4),
+        "latest_close": latest_bar.close,
+        "sma_20": indicators.sma_20,
+        "ema_12": indicators.ema_12,
+        "dollar_index": dollar_index,
+        "real_rates": real_rates,
+        "available_signals": available_signals,
+        "unavailable_signals": unavailable_signals,
+    }
+    return {
+        **state,
+        "macro_inputs": inputs,
+        "unavailable_signals": unavailable_signals,
+    }
+
+
 def agent_technical_analysis(state: WorkflowState) -> WorkflowState:
     latest_bar = _required(state, "latest_bar")
     quote = _required(state, "quote")
@@ -193,9 +653,10 @@ def agent_technical_analysis(state: WorkflowState) -> WorkflowState:
         agent="technical",
         direction=direction,
         confidence=remote.confidence if remote else _technical_confidence(indicators, direction),
-        rationale=remote.summary
-        if remote
-        else _technical_summary(quote.current_price, latest_bar, indicators, direction),
+        rationale=_summary_or_fallback(
+            remote.summary if remote else None,
+            _technical_summary(quote.current_price, latest_bar, indicators, direction),
+        ),
     )
     return {
         **state,
@@ -206,11 +667,11 @@ def agent_technical_analysis(state: WorkflowState) -> WorkflowState:
 
 
 def agent_macro_analysis(state: WorkflowState) -> WorkflowState:
+    inputs = state.get("macro_inputs", {})
     remote, diagnostic = _remote_agent_response(state, "macro")
-    summary = (
-        remote.summary
-        if remote
-        else "宏观 agent 暂未调用外部实时宏观源，当前输出保持中性，并要求后续版本记录可验证来源。"
+    summary = _summary_or_fallback(
+        remote.summary if remote else None,
+        _macro_summary(inputs),
     )
     vote = AgentVote(
         agent="macro",
@@ -228,7 +689,8 @@ def agent_macro_analysis(state: WorkflowState) -> WorkflowState:
 
 def agent_news_analysis(state: WorkflowState) -> WorkflowState:
     remote, diagnostic = _remote_agent_response(state, "news")
-    summary = remote.summary if remote else "新闻 agent 暂未调用外部实时新闻源，当前不使用未验证新闻作为方向依据。"
+    inputs = state.get("newsflow_inputs", {})
+    summary = _summary_or_fallback(remote.summary if remote else None, _news_summary(inputs))
     vote = AgentVote(
         agent="news",
         direction=remote.direction if remote else ForecastDirection.neutral,
@@ -307,10 +769,24 @@ def agent_forecast_planning(state: WorkflowState) -> WorkflowState:
         forecast.macro_summary = state["macro_summary"]
     if "news_summary" in state:
         forecast.news_summary = state["news_summary"]
+    if "market_sentiment_summary" in state:
+        forecast.market_sentiment_summary = state["market_sentiment_summary"]
+    if "alt_data_summary" in state:
+        forecast.alt_data_summary = state["alt_data_summary"]
     if "risk_summary" in state:
         forecast.risk_summary = state["risk_summary"]
     if "risk_notes" in state:
         forecast.risk_notes = _merge_notes(forecast.risk_notes, state["risk_notes"])
+    feedback_history = state.get("forecast_feedback_history")
+    if feedback_history:
+        feedback_note = "最近评估反馈：" + " | ".join(feedback_history[:3])
+        forecast.risk_notes = _append_note(forecast.risk_notes, feedback_note)
+        forecast.risk_summary = f"{forecast.risk_summary} {feedback_note}"
+    if state.get("unavailable_signals"):
+        unavailable_items = _unique_strings([str(item) for item in state["unavailable_signals"]])
+        unavailable_note = "不可用信号：" + "、".join(unavailable_items)
+        forecast.risk_notes = _append_note(forecast.risk_notes, unavailable_note)
+        forecast.risk_summary = f"{forecast.risk_summary} {unavailable_note}"
 
     return {**state, "forecast": forecast}
 
@@ -529,7 +1005,13 @@ def _existing_votes_without(state: WorkflowState, agent_name: str) -> list[Agent
 def _remote_agent_response(state: WorkflowState, agent_name: str) -> tuple[AgentApiResponse | None, str | None]:
     settings = state.get("settings") or get_settings()
     if not settings.openai_base_url or not settings.openai_model or not settings.openai_api_key:
-        return None, None
+        return (
+            None,
+            (
+                f"OpenAI-compatible {agent_name} agent 未配置有效 base_url/model/API Key，"
+                "已回退到 deterministic workflow 输出。"
+            ),
+        )
 
     # 只发送可验证的市场/指标上下文，不把 secret 或 settings 放进 payload。
     payload = _agent_payload(state, agent_name)
@@ -547,6 +1029,11 @@ def _remote_agent_response(state: WorkflowState, agent_name: str) -> tuple[Agent
     return AgentApiResponse.model_validate(result.model_dump()), None
 
 
+def _summary_or_fallback(summary: str | None, fallback: str) -> str:
+    cleaned = (summary or "").strip()
+    return cleaned or fallback
+
+
 def _merge_notes(base_notes: list[str] | None, extra_notes: list[str] | None) -> list[str]:
     merged: list[str] = []
     for note in [*(base_notes or []), *(extra_notes or [])]:
@@ -559,6 +1046,22 @@ def _append_note(notes: list[str] | None, note: str | None) -> list[str]:
     if note is None:
         return list(notes or [])
     return _merge_notes(notes, [note])
+
+
+def _direction_label_cn(value: str) -> str:
+    return {
+        ForecastDirection.bullish.value: "看多",
+        ForecastDirection.bearish.value: "看空",
+        ForecastDirection.neutral.value: "中性",
+    }.get(value, value)
+
+
+def _unique_strings(values: list[str]) -> list[str]:
+    unique: list[str] = []
+    for value in values:
+        if value not in unique:
+            unique.append(value)
+    return unique
 
 
 def _agent_payload(state: WorkflowState, agent_name: str) -> dict[str, object]:
@@ -574,7 +1077,301 @@ def _agent_payload(state: WorkflowState, agent_name: str) -> dict[str, object]:
         payload["symbol"] = quote.symbol
     if indicators:
         payload["indicators"] = indicators.model_dump(mode="json")
+    if agent_name == "market_sentiment":
+        payload["market_sentiment_inputs"] = state.get("market_sentiment_inputs", {})
+        payload["forecast_feedback_history"] = state.get("forecast_feedback_history", [])
+    if agent_name == "alt_data":
+        payload["alt_data_inputs"] = state.get("alt_data_inputs", {})
+        payload["unavailable_signals"] = state.get("unavailable_signals", [])
+    if agent_name == "news":
+        payload["newsflow_inputs"] = state.get("newsflow_inputs", {})
+    if agent_name == "macro":
+        payload["macro_inputs"] = state.get("macro_inputs", {})
     return payload
+
+
+def _macro_summary(inputs: dict[str, object]) -> str:
+    current_price = inputs.get("current_price")
+    latest_close = inputs.get("latest_close")
+    sma_20 = inputs.get("sma_20")
+    ema_12 = inputs.get("ema_12")
+    dollar_index = inputs.get("dollar_index") or {}
+    real_rates = inputs.get("real_rates") or {}
+    unavailable = inputs.get("unavailable_signals") or []
+    available = inputs.get("available_signals") or []
+
+    parts = ["宏观面围绕美元指数与实际利率解读，并与价格结构一同作为研究背景。"]
+    if isinstance(current_price, (int, float)) and isinstance(latest_close, (int, float)):
+        parts.append(f"当前报价 {float(current_price):.2f}，最新完成日线收盘 {float(latest_close):.2f}。")
+    if isinstance(sma_20, (int, float)):
+        parts.append(f"SMA-20 为 {float(sma_20):.2f}。")
+    if isinstance(ema_12, (int, float)):
+        parts.append(f"EMA-12 为 {float(ema_12):.2f}。")
+
+    if isinstance(dollar_index, dict) and dollar_index.get("status") == "available":
+        value = dollar_index.get("value")
+        change = dollar_index.get("change")
+        value_text = f"{float(value):.2f}" if isinstance(value, (int, float)) else "未知"
+        change_text = f"{float(change):+.2f}" if isinstance(change, (int, float)) else "未知"
+        parts.append(f"美元指数 {value_text}，日内变化 {change_text}。")
+    else:
+        parts.append("美元指数暂不可用。")
+
+    if isinstance(real_rates, dict) and real_rates.get("status") == "available":
+        value = real_rates.get("value")
+        change = real_rates.get("change")
+        value_text = f"{float(value):.2f}%" if isinstance(value, (int, float)) else "未知"
+        change_text = f"{float(change):+.2f}" if isinstance(change, (int, float)) else "未知"
+        parts.append(f"实际利率 {value_text}，变化 {change_text} 个百分点。")
+    else:
+        parts.append("实际利率暂不可用。")
+
+    if available:
+        parts.append(f"当前可用宏观信号 {len(available)} 项。")
+    if unavailable:
+        parts.append(f"仍有 {len(unavailable)} 项宏观相关信号暂不可用。")
+
+    return "".join(parts)
+
+
+def _market_sentiment_summary(inputs: dict[str, object]) -> str:
+    trend_bias = str(inputs.get("trend_bias") or "neutral")
+    rsi = inputs.get("rsi_14")
+    feedback_count = int(inputs.get("feedback_signal_count") or 0)
+    feedback_text = "近期反馈较少" if feedback_count == 0 else f"参考了 {feedback_count} 条历史评估反馈"
+    unavailable = inputs.get("unavailable_signals") or []
+    unavailable_text = f"，其中 {len(unavailable)} 类外部情绪源仍不可用" if unavailable else ""
+    rsi_text = f"RSI 参考值 {float(rsi):.2f}" if isinstance(rsi, (int, float)) and rsi is not None else "RSI 缺失"
+    cftc = inputs.get("cftc_commitments") or {}
+    cftc_text = "美国商品期货交易委员会（CFTC）持仓暂不可用"
+    if isinstance(cftc, dict) and cftc.get("status") == "available":
+        report_date = str(cftc.get("report_date") or "")
+        net_noncommercial = int(cftc.get("net_noncommercial") or 0)
+        positioning_bias = str(cftc.get("positioning_bias") or "neutral")
+        divergence = ""
+        if positioning_bias != trend_bias:
+            divergence = "，与价格结构存在分歧"
+        cftc_text = (
+            f"美国商品期货交易委员会（CFTC）最新报告 {report_date} 的黄金净非商业头寸 {net_noncommercial:+d}，"
+            f"定位偏{_direction_label_cn(positioning_bias)}{divergence}"
+        )
+    newsflow_headline_count = int(inputs.get("newsflow_headline_count") or 0)
+    newsflow_sentiment = str(inputs.get("newsflow_sentiment") or "neutral")
+    newsflow_text = "新闻流暂不可用"
+    if newsflow_headline_count:
+        sentiment_text = {
+            "bullish": "看多",
+            "bearish": "看空",
+            "neutral": "中性",
+        }.get(newsflow_sentiment, "中性")
+        newsflow_text = f"新闻流已抓取 {newsflow_headline_count} 条标题，整体情绪为{sentiment_text}"
+    return (
+        f"市场情绪按{_direction_label_cn(trend_bias)}方向解读，{rsi_text}，{cftc_text}，"
+        f"{newsflow_text}，{feedback_text}{unavailable_text}。"
+    )
+
+
+def _market_sentiment_direction(inputs: dict[str, object]) -> ForecastDirection:
+    trend_bias = str(inputs.get("trend_bias") or "neutral")
+    if trend_bias == ForecastDirection.bullish.value:
+        return ForecastDirection.bullish
+    if trend_bias == ForecastDirection.bearish.value:
+        return ForecastDirection.bearish
+    return ForecastDirection.neutral
+
+
+def _market_sentiment_confidence(inputs: dict[str, object], direction: ForecastDirection) -> float:
+    confidence = 0.36
+    if direction == ForecastDirection.neutral:
+        confidence -= 0.03
+    if inputs.get("feedback_signal_count"):
+        confidence += 0.05
+    if inputs.get("rsi_14") is not None:
+        confidence += 0.04
+    return round(min(max(confidence, 0.25), 0.58), 2)
+
+
+def _alt_data_summary(inputs: dict[str, object]) -> str:
+    pizza_index = inputs.get("pizza_index") or {}
+    dollar_index = inputs.get("dollar_index") or {}
+    real_rates = inputs.get("real_rates") or {}
+    unavailable = inputs.get("unavailable_signals") or []
+    notes = [
+        _pizza_index_note(pizza_index),
+        _signal_note("美元指数", dollar_index, value_key="value", value_suffix="", change_key="change"),
+        _signal_note(
+            "实际利率",
+            real_rates,
+            value_key="value",
+            value_suffix="%",
+            change_key="change",
+            change_suffix="个百分点",
+        ),
+    ]
+    lines = [
+        "另类数据维度以保守处理为主。",
+        *[f"- {note}" for note in notes],
+        f"- 未接入信号数 {len(unavailable)}，因此本轮仅用于风险提示，不作为方向依据。",
+    ]
+    return "\n".join(lines)
+
+
+def _pizza_index_note(item: object) -> str:
+    if not isinstance(item, dict) or item.get("status") != "available":
+        return "五角大楼披萨指数不可用"
+
+    doughcon_level = item.get("doughcon_level")
+    doughcon_label = str(item.get("doughcon_label") or "unknown")
+    doughcon_description = str(item.get("doughcon_description") or "")
+    average_spike_pct = item.get("average_spike_pct")
+    max_spike_pct = item.get("max_spike_pct")
+    pizza_index_score = item.get("pizza_index_score")
+    activity_bias = str(item.get("activity_bias") or "neutral")
+    top_locations = item.get("top_locations") or []
+    top_location_text = ""
+    if isinstance(top_locations, list) and top_locations:
+        top_items = []
+        for location in top_locations[:2]:
+            if not isinstance(location, dict):
+                continue
+            name = str(location.get("name") or "unknown")
+            spike_pct = location.get("spike_pct")
+            if isinstance(spike_pct, (int, float)):
+                top_items.append(f"{name} {float(spike_pct):.0f}%")
+        if top_items:
+            top_location_text = "，门店活动：" + "；".join(top_items)
+    avg_text = f"{float(average_spike_pct):.0f}%" if isinstance(average_spike_pct, (int, float)) else "未知"
+    max_text = f"{float(max_spike_pct):.0f}%" if isinstance(max_spike_pct, (int, float)) else "未知"
+    score_text = f"{int(pizza_index_score)}/100" if isinstance(pizza_index_score, (int, float)) else "未知"
+    activity_bias_text = _direction_label_cn(activity_bias)
+    if isinstance(doughcon_level, int):
+        doughcon_text = f"五角大楼披萨指数 DOUGHCON {doughcon_level}（{doughcon_label}"
+        if doughcon_description:
+            doughcon_text += f" / {doughcon_description}"
+        doughcon_text += "）"
+    else:
+        doughcon_text = "五角大楼披萨指数 DOUGHCON 未知"
+    return (
+        f"{doughcon_text}，平均活跃度 {avg_text}，最高 {max_text}，"
+        f"指数分 {score_text}，整体偏{activity_bias_text}{top_location_text}"
+    )
+
+
+def _news_summary(inputs: dict[str, object]) -> str:
+    if not isinstance(inputs, dict) or inputs.get("status") != "available":
+        return "新闻流暂未接入可靠主流媒体标题，本轮不使用未经验证的新闻作为方向依据。"
+
+    headline_count = int(inputs.get("headline_count") or 0)
+    source_count = int(inputs.get("source_count") or 0)
+    sentiment = str(inputs.get("sentiment") or "neutral")
+    topics = [str(topic) for topic in inputs.get("topics") or []]
+    top_headlines = inputs.get("top_headlines") or []
+    representative = []
+    for item in top_headlines[:3]:
+        if not isinstance(item, dict):
+            continue
+        source = translate_source_name_to_chinese(str(item.get("source") or "unknown"))
+        title = translate_headline_to_chinese(str(item.get("title") or "").strip())
+        if title:
+            representative.append(f"{source}: {title}")
+    topic_text = ""
+    if topics:
+        translated_topics = [
+            {
+                "Fed": "美联储",
+                "Dollar": "美元",
+                "Inflation": "通胀",
+                "Gold": "黄金",
+                "Risk": "风险",
+            }.get(topic, topic)
+            for topic in topics
+        ]
+        topic_text = f"，主题聚焦 {'、'.join(translated_topics)}"
+    sentiment_text = {
+        "bullish": "看多",
+        "bearish": "看空",
+        "neutral": "中性",
+    }.get(sentiment, "中性")
+    lines = [
+        f"新闻流已从 {source_count} 个主流媒体源抓取到 {headline_count} 条标题。",
+        f"整体情绪为{sentiment_text}{topic_text}。",
+    ]
+    if representative:
+        lines.append("代表性标题：")
+        lines.extend(f"- {headline}" for headline in representative)
+    return "\n".join(lines)
+
+
+def _signal_note(
+    label: str,
+    item: object,
+    *,
+    value_key: str,
+    value_suffix: str,
+    change_key: str | None = None,
+    change_suffix: str = "",
+) -> str:
+    if not isinstance(item, dict) or item.get("status") != "available":
+        return f"{label}不可用"
+
+    value = item.get(value_key)
+    if not isinstance(value, (int, float)):
+        return f"{label}不可用"
+
+    note = f"{label} {value:.2f}{value_suffix}" if value_suffix else f"{label} {value:.2f}"
+    if change_key:
+        change_value = item.get(change_key)
+        if isinstance(change_value, (int, float)):
+            sign = "+" if change_value > 0 else ""
+            note += f"，较前值 {sign}{change_value:.2f}{change_suffix}"
+    return note
+
+
+def _external_source_status(signals: list[dict[str, object]]) -> str:
+    if all(signal.get("status") == "available" for signal in signals):
+        return "available"
+    if any(signal.get("status") == "available" for signal in signals):
+        return "partial"
+    return "unavailable"
+
+
+def _fetch_cftc_commitments(signal_transport: httpx.BaseTransport | None) -> tuple[dict[str, object], str | None]:
+    try:
+        return fetch_cftc_gold_commitments(signal_transport), None
+    except (ExternalSignalError, httpx.HTTPError, ValueError, TypeError) as exc:
+        return {
+            "status": "unavailable",
+            "source": "publicreporting.cftc.gov",
+            "series_id": "CFTC_GOLD_COMMITMENTS",
+            "series_name": "CFTC 黄金持仓",
+            "note": "CFTC 黄金持仓暂不可用，保持保守处理。",
+        }, f"CFTC 黄金持仓源不可用：{exc}"
+
+
+def _fetch_dollar_index(signal_transport: httpx.BaseTransport | None) -> tuple[dict[str, object], str | None]:
+    try:
+        return fetch_dollar_index(signal_transport), None
+    except (ExternalSignalError, httpx.HTTPError, ValueError, TypeError) as exc:
+        return {
+            "status": "unavailable",
+            "source": "fred.stlouisfed.org",
+            "series_id": "DTWEXBGS",
+            "series_name": "美元指数",
+            "note": "美元指数暂不可用，保持保守处理。",
+        }, f"美元指数源不可用：{exc}"
+
+
+def _fetch_real_rates(signal_transport: httpx.BaseTransport | None) -> tuple[dict[str, object], str | None]:
+    try:
+        return fetch_real_rates(signal_transport), None
+    except (ExternalSignalError, httpx.HTTPError, ValueError, TypeError) as exc:
+        return {
+            "status": "unavailable",
+            "source": "fred.stlouisfed.org",
+            "series_id": "DFII10",
+            "series_name": "实际利率",
+            "note": "实际利率暂不可用，保持保守处理。",
+        }, f"实际利率源不可用：{exc}"
 
 
 def _input_summary(state: WorkflowState) -> dict[str, object]:

@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import inspect
 
 from goldfxgraph.persistence.database import create_session_factory, init_models
 from goldfxgraph.persistence.repositories import ForecastRepository
@@ -129,3 +130,53 @@ async def test_repository_returns_none_for_missing_research_run() -> None:
     repo = ForecastRepository(session_factory)
 
     assert await repo.get_research_run(999) is None
+
+
+async def test_init_models_backfills_missing_forecast_columns() -> None:
+    session_factory = create_session_factory("sqlite+aiosqlite:///:memory:")
+    async with session_factory.engine.begin() as connection:
+        await connection.exec_driver_sql(
+            """
+            CREATE TABLE forecasts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id INTEGER NOT NULL UNIQUE,
+                created_at DATETIME NOT NULL,
+                symbol VARCHAR(32) NOT NULL,
+                reference_time DATETIME NOT NULL,
+                data_timestamp DATETIME NOT NULL,
+                data_source VARCHAR(255) NOT NULL,
+                current_price FLOAT NOT NULL,
+                daily_open FLOAT NOT NULL,
+                daily_high FLOAT NOT NULL,
+                daily_low FLOAT NOT NULL,
+                daily_close FLOAT NOT NULL,
+                direction VARCHAR(16) NOT NULL,
+                entry_price FLOAT,
+                take_profit_price FLOAT,
+                stop_loss_price FLOAT,
+                holding_period VARCHAR(255) NOT NULL,
+                intraday_action TEXT NOT NULL,
+                long_term_action TEXT NOT NULL,
+                confidence_score FLOAT NOT NULL,
+                technical_summary TEXT NOT NULL,
+                macro_summary TEXT,
+                news_summary TEXT,
+                risk_summary TEXT NOT NULL,
+                agent_votes JSON NOT NULL,
+                risk_notes JSON NOT NULL,
+                disclaimer TEXT NOT NULL
+            )
+            """
+        )
+
+    await init_models(session_factory.engine)
+
+    async with session_factory.engine.begin() as connection:
+        columns = await connection.run_sync(
+            lambda sync_connection: {
+                column["name"] for column in inspect(sync_connection).get_columns("forecasts")
+            }
+        )
+
+    assert "market_sentiment_summary" in columns
+    assert "alt_data_summary" in columns

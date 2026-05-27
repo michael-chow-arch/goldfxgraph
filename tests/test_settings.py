@@ -23,7 +23,6 @@ def test_settings_loads_from_explicit_env_file(tmp_path: Path) -> None:
                 "GOLDFXGRAPH_DATABASE_URL=postgresql+asyncpg://u:p@localhost:5432/db",
                 "GOLDFXGRAPH_XAUUSD_CSV_PATH=data/raw/xauusd_d.csv",
                 "GOLDFXGRAPH_CURRENT_QUOTE_URL=https://example.test/quote",
-                "GOLDFXGRAPH_CURRENT_QUOTE_API_KEY=quote-key",
                 "GOLDFXGRAPH_AGENT_API_BASE_URL=https://agent.example.test/v1",
                 "GOLDFXGRAPH_AGENT_API_KEY=agent-key",
             ]
@@ -41,16 +40,44 @@ def test_settings_loads_from_explicit_env_file(tmp_path: Path) -> None:
     assert settings.agent_api_key.get_secret_value() == "agent-key"
 
 
+def test_settings_default_eod_backfill_schedule_targets_new_york_close() -> None:
+    settings = GoldFXGraphSettings()
+
+    assert settings.eod_backfill_timezone == "America/New_York"
+    assert settings.eod_backfill_cutoff_hour == 17
+    assert settings.eod_backfill_cutoff_minute == 0
+
+
+def test_settings_treats_placeholder_secrets_as_unset(tmp_path: Path) -> None:
+    env_file = tmp_path / "dev.env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "GOLDFXGRAPH_AGENT_API_KEY=change_me",
+                "OPENAI_API_KEY=change_me",
+                "GOLDFXGRAPH_OPENAI_MODEL=gpt-5.1",
+                "GOLDFXGRAPH_OPENAI_BASE_URL=https://api.zhizengzeng.com/v1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(env_file=env_file)
+
+    assert settings.agent_api_key is None
+    assert settings.openai_api_key is None
+    assert settings.openai_model == "gpt-5.1"
+    assert settings.openai_base_url == "https://api.zhizengzeng.com/v1"
+
+
 def test_settings_repr_does_not_expose_agent_key() -> None:
     settings = GoldFXGraphSettings(
         agent_api_key=SecretStr("super-secret"),
-        current_quote_api_key=SecretStr("quote-secret"),
     )
 
     rendered = repr(settings)
 
     assert "super-secret" not in rendered
-    assert "quote-secret" not in rendered
 
 
 def test_environment_variables_override_env_file(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 
 from goldfxgraph.api.errors import (
     ApiError,
@@ -13,9 +13,9 @@ from goldfxgraph.api.errors import (
 from goldfxgraph.market_data.csv_loader import CsvValidationError
 from goldfxgraph.market_data.current_quote import QuoteProviderError
 from goldfxgraph.persistence.repositories import ForecastRepository
-from goldfxgraph.schemas.forecast import ForecastResult, ResearchRunResult
+from goldfxgraph.schemas.forecast import DailyBar, ForecastHistoryItem, ForecastResult, ResearchRunResult
 from goldfxgraph.workflow.graph import build_forecast_graph
-from goldfxgraph.workflow.nodes import WorkflowState
+from goldfxgraph.workflow.nodes import MarketDataFreshnessError, WorkflowState
 
 router = APIRouter()
 
@@ -27,6 +27,30 @@ async def get_latest_forecast(request: Request) -> ForecastResult:
     if forecast is None:
         raise ForecastNotFoundError()
     return forecast
+
+
+@router.get("/forecast/history", response_model=list[ForecastHistoryItem])
+async def get_forecast_history(request: Request, limit: int = 30) -> list[ForecastHistoryItem]:
+    repository = _repository(request)
+    settings = request.app.state.settings
+    history = await repository.get_daily_forecast_history(
+        limit=limit,
+        timezone_name=settings.eod_backfill_timezone,
+        cutoff_hour=settings.eod_backfill_cutoff_hour,
+        cutoff_minute=settings.eod_backfill_cutoff_minute,
+    )
+    return history
+
+
+@router.get("/market-data/bars", response_model=list[DailyBar])
+async def get_market_data_bars(
+    request: Request,
+    symbol: str = "XAUUSD",
+    limit: int = Query(default=60, ge=1, le=180),
+) -> list[DailyBar]:
+    repository = _repository(request)
+    bars = await repository.get_recent_market_bars(symbol=symbol, limit=limit)
+    return bars
 
 
 @router.post("/research-runs", response_model=ResearchRunResult)
@@ -46,6 +70,10 @@ async def create_research_run(request: Request) -> ResearchRunResult:
         message = _quote_provider_message(exc)
         await _mark_failed(repository, run_id, message)
         raise ApiError(type="quote_provider_error", message=message, status_code=503) from exc
+    except MarketDataFreshnessError as exc:
+        message = _market_data_freshness_message(exc)
+        await _mark_failed(repository, run_id, message)
+        raise ApiError(type="market_data_error", message=message, status_code=503) from exc
     except CsvValidationError as exc:
         await _mark_failed(repository, run_id, "Market data validation failed")
         raise ApiError(
@@ -112,6 +140,13 @@ def _quote_provider_message(exc: QuoteProviderError) -> str:
     message = str(exc).strip()
     if not message:
         return "Current quote provider request failed"
+    return message
+
+
+def _market_data_freshness_message(exc: MarketDataFreshnessError) -> str:
+    message = str(exc).strip()
+    if not message:
+        return "Market data freshness preflight failed"
     return message
 
 
