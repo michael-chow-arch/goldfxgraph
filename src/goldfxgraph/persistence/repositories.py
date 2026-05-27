@@ -16,6 +16,7 @@ from goldfxgraph.persistence.models import (
     ForecastModel,
     MarketDataBarModel,
     ResearchRunModel,
+    SchedulerRunModel,
 )
 from goldfxgraph.schemas.forecast import (
     DailyBar,
@@ -23,7 +24,9 @@ from goldfxgraph.schemas.forecast import (
     ForecastEvaluationResult,
     ForecastHistoryItem,
     ForecastResult,
+    ForecastWindowDirection,
     ResearchRunResult,
+    SchedulerRunStatus,
 )
 from goldfxgraph.timeframes import trading_day_for_timestamp
 
@@ -190,6 +193,66 @@ class ForecastRepository:
             await session.refresh(run)
             return run
 
+    async def create_scheduler_run(self, input_summary: dict[str, object]) -> SchedulerRunModel:
+        async with self._session_factory.sessionmaker() as session:
+            run = SchedulerRunModel(
+                status="running",
+                current_stage="scheduled",
+                input_summary=_json_safe_object(input_summary),
+            )
+            session.add(run)
+            await session.commit()
+            await session.refresh(run)
+            return run
+
+    async def update_scheduler_run_stage(
+        self,
+        run_id: int,
+        *,
+        current_stage: str,
+        agent_statuses: list[dict[str, str]] | None = None,
+        agent_diagnostics: list[dict[str, Any]] | None = None,
+        status: str = "running",
+        last_error: str | None = None,
+        completed_at: datetime | None = None,
+    ) -> SchedulerRunStatus:
+        async with self._session_factory.sessionmaker() as session:
+            run = await session.get(SchedulerRunModel, run_id)
+            if run is None:
+                raise ValueError(f"scheduler run {run_id} not found")
+            run.current_stage = current_stage
+            run.status = status
+            run.agent_statuses = list(agent_statuses or [])
+            run.agent_diagnostics = list(agent_diagnostics or [])
+            run.last_error = last_error
+            run.completed_at = completed_at
+            await session.commit()
+            await session.refresh(run)
+            return self._scheduler_status_from_model(run)
+
+    async def mark_scheduler_run_success(self, run_id: int, *, current_stage: str = "completed") -> SchedulerRunStatus:
+        return await self.update_scheduler_run_stage(
+            run_id,
+            current_stage=current_stage,
+            status="success",
+            completed_at=datetime.now(UTC),
+        )
+
+    async def mark_scheduler_run_failed(
+        self,
+        run_id: int,
+        *,
+        current_stage: str,
+        last_error: str,
+    ) -> SchedulerRunStatus:
+        return await self.update_scheduler_run_stage(
+            run_id,
+            current_stage=current_stage,
+            status="failed",
+            last_error=last_error,
+            completed_at=datetime.now(UTC),
+        )
+
     async def mark_run_success(self, run_id: int) -> None:
         async with self._session_factory.sessionmaker() as session:
             run = await session.get(ResearchRunModel, run_id)
@@ -227,7 +290,10 @@ class ForecastRepository:
                 daily_low=forecast.daily_low,
                 daily_close=forecast.daily_close,
                 direction=forecast.direction.value,
+                window_directions=[window.model_dump(mode="json") for window in forecast.window_directions],
                 entry_price=forecast.entry_price,
+                entry_price_low=forecast.entry_price_low,
+                entry_price_high=forecast.entry_price_high,
                 take_profit_price=forecast.take_profit_price,
                 stop_loss_price=forecast.stop_loss_price,
                 holding_period=forecast.holding_period,
@@ -371,9 +437,7 @@ class ForecastRepository:
                 ForecastHistoryItem(
                     forecast=self._forecast_result_from_model(model),
                     evaluation=(
-                        self._evaluation_result_from_model(model.evaluation)
-                        if model.evaluation is not None
-                        else None
+                        self._evaluation_result_from_model(model.evaluation) if model.evaluation is not None else None
                     ),
                     trading_day=trading_day,
                 )
@@ -455,6 +519,22 @@ class ForecastRepository:
                 evaluation=self._evaluation_result_from_model(run.evaluation) if run.evaluation else None,
             )
 
+    async def get_latest_scheduler_run(self) -> SchedulerRunStatus | None:
+        async with self._session_factory.sessionmaker() as session:
+            statement = (
+                select(SchedulerRunModel)
+                .order_by(
+                    SchedulerRunModel.started_at.desc(),
+                    SchedulerRunModel.id.desc(),
+                )
+                .limit(1)
+            )
+            result = await session.execute(statement)
+            model = result.scalars().first()
+            if model is None:
+                return None
+            return self._scheduler_status_from_model(model)
+
     def _forecast_result_from_model(self, forecast_model: ForecastModel) -> ForecastResult:
         agent_votes = self._json_list(forecast_model.agent_votes)
         return ForecastResult(
@@ -470,7 +550,13 @@ class ForecastRepository:
             daily_low=forecast_model.daily_low,
             daily_close=forecast_model.daily_close,
             direction=ForecastDirection(forecast_model.direction),
+            window_directions=[
+                ForecastWindowDirection.model_validate(window)
+                for window in self._json_list(forecast_model.window_directions)
+            ],
             entry_price=forecast_model.entry_price,
+            entry_price_low=forecast_model.entry_price_low,
+            entry_price_high=forecast_model.entry_price_high,
             take_profit_price=forecast_model.take_profit_price,
             stop_loss_price=forecast_model.stop_loss_price,
             holding_period=forecast_model.holding_period,
@@ -502,6 +588,18 @@ class ForecastRepository:
             summary=evaluation_model.summary,
             feedback_notes=[str(note) for note in self._json_list(evaluation_model.feedback_notes)],
             signal_coverage=self._json_object(evaluation_model.signal_coverage),
+        )
+
+    def _scheduler_status_from_model(self, scheduler_model: SchedulerRunModel) -> SchedulerRunStatus:
+        return SchedulerRunStatus(
+            id=scheduler_model.id,
+            status=scheduler_model.status,
+            started_at=_ensure_utc(scheduler_model.started_at),
+            completed_at=_ensure_utc(scheduler_model.completed_at) if scheduler_model.completed_at else None,
+            current_stage=scheduler_model.current_stage,
+            agent_statuses=[dict(status) for status in self._json_list(scheduler_model.agent_statuses)],
+            agent_diagnostics=[dict(diagnostic) for diagnostic in self._json_list(scheduler_model.agent_diagnostics)],
+            last_error=scheduler_model.last_error,
         )
 
     @staticmethod

@@ -67,6 +67,28 @@ class ResearchRunModel(Base):
     )
 
 
+class SchedulerRunModel(Base):
+    __tablename__ = "scheduler_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    status: Mapped[str] = mapped_column(String(32), default="running", nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    current_stage: Mapped[str] = mapped_column(String(128), default="scheduled", nullable=False)
+    agent_statuses: Mapped[list[dict[str, str]]] = mapped_column(
+        MutableList.as_mutable(JSON),
+        default=list,
+        nullable=False,
+    )
+    agent_diagnostics: Mapped[list[dict[str, Any]]] = mapped_column(
+        MutableList.as_mutable(JSON),
+        default=list,
+        nullable=False,
+    )
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    input_summary: Mapped[dict[str, Any]] = mapped_column(MutableDict.as_mutable(JSON), default=dict, nullable=False)
+
+
 class ForecastModel(Base):
     __tablename__ = "forecasts"
 
@@ -83,7 +105,14 @@ class ForecastModel(Base):
     daily_low: Mapped[float] = mapped_column(nullable=False)
     daily_close: Mapped[float] = mapped_column(nullable=False)
     direction: Mapped[str] = mapped_column(String(16), nullable=False)
+    window_directions: Mapped[list[dict[str, Any]]] = mapped_column(
+        MutableList.as_mutable(JSON),
+        default=list,
+        nullable=False,
+    )
     entry_price: Mapped[float | None] = mapped_column(nullable=True)
+    entry_price_low: Mapped[float | None] = mapped_column(nullable=True)
+    entry_price_high: Mapped[float | None] = mapped_column(nullable=True)
     take_profit_price: Mapped[float | None] = mapped_column(nullable=True)
     stop_loss_price: Mapped[float | None] = mapped_column(nullable=True)
     holding_period: Mapped[str] = mapped_column(String(255), nullable=False)

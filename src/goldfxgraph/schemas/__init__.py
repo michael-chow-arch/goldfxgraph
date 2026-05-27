@@ -6,8 +6,10 @@ from goldfxgraph.schemas.forecast import (
     DailyBar,
     ForecastDirection,
     ForecastResult,
+    ForecastWindowDirection,
     MarketDataSet,
     ResearchRunResult,
+    SchedulerRunStatus,
     TechnicalIndicators,
 )
 
@@ -17,7 +19,9 @@ __all__ = [
     "DailyBar",
     "ForecastDirection",
     "ForecastResult",
+    "ForecastWindowDirection",
     "MarketDataSet",
     "ResearchRunResult",
+    "SchedulerRunStatus",
     "TechnicalIndicators",
 ]

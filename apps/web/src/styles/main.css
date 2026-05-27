@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;700;900&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;700;900&display=swap");
 
 @tailwind base;
 @tailwind components;
@@ -8,7 +8,7 @@
   :root {
     color: #e5eef8;
     background-color: #020617;
-    font-family: "IBM Plex Sans", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    font-family: "Fira Sans", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
     line-height: 1.5;
     font-weight: 400;
     text-rendering: optimizeLegibility;
@@ -32,11 +32,11 @@
     min-width: 320px;
     min-height: 100vh;
     background:
-      radial-gradient(circle at 16% 10%, rgba(34, 211, 238, 0.08), transparent 20%),
-      radial-gradient(circle at 82% 12%, rgba(245, 158, 11, 0.1), transparent 18%),
-      radial-gradient(circle at 50% 0%, rgba(15, 23, 42, 0.96), transparent 18%),
-      radial-gradient(circle at 50% 100%, rgba(14, 165, 233, 0.06), transparent 24%),
-      linear-gradient(180deg, #020617 0%, #0b1220 48%, #050816 100%);
+      radial-gradient(circle at 16% 10%, rgba(34, 211, 238, 0.16), transparent 20%),
+      radial-gradient(circle at 82% 12%, rgba(236, 72, 153, 0.1), transparent 16%),
+      radial-gradient(circle at 55% 0%, rgba(245, 158, 11, 0.08), transparent 18%),
+      radial-gradient(circle at 50% 100%, rgba(16, 185, 129, 0.06), transparent 24%),
+      linear-gradient(180deg, #020617 0%, #060816 50%, #02040b 100%);
     color: #e5eef8;
     background-attachment: fixed;
   }
@@ -71,8 +71,8 @@
     content: "";
     @apply pointer-events-none absolute inset-0 z-0;
     background-image:
-      linear-gradient(rgba(148, 163, 184, 0.08) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(148, 163, 184, 0.08) 1px, transparent 1px);
+      linear-gradient(rgba(34, 211, 238, 0.08) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(34, 211, 238, 0.08) 1px, transparent 1px);
     background-size: 100% 84px, 84px 100%;
     mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.5), transparent 88%);
   }
@@ -85,10 +85,10 @@
     content: "";
     @apply pointer-events-none absolute inset-0 z-0;
     background:
-      radial-gradient(circle at 50% 0%, rgba(56, 189, 248, 0.08), transparent 18%),
-      linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 28%, rgba(245, 158, 11, 0.05) 72%, transparent 100%);
+      radial-gradient(circle at 50% 0%, rgba(56, 189, 248, 0.12), transparent 18%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 28%, rgba(245, 158, 11, 0.06) 72%, transparent 100%);
     mix-blend-mode: soft-light;
-    opacity: 0.65;
+    opacity: 0.82;
   }
 
   .market-session--jp.dashboard-shell::after,
@@ -132,26 +132,27 @@
   }
 
   .dashboard-panel {
-    @apply relative overflow-hidden border border-slate-400/15 bg-[#0b1220]/80 shadow-[0_28px_80px_-44px_rgba(0,0,0,0.62)] backdrop-blur-2xl;
+    @apply relative overflow-hidden border border-slate-400/15 bg-[#07111f] shadow-[0_28px_80px_-44px_rgba(0,0,0,0.58)] backdrop-blur-2xl;
   }
 
   .dashboard-panel::before {
     content: "";
     @apply pointer-events-none absolute inset-0;
     background:
-      linear-gradient(135deg, rgba(56, 189, 248, 0.08), transparent 24%),
-      radial-gradient(circle at top right, rgba(56, 189, 248, 0.12), transparent 24%),
-      radial-gradient(circle at 18% 18%, rgba(245, 158, 11, 0.12), transparent 16%);
+      linear-gradient(135deg, rgba(56, 189, 248, 0.12), transparent 24%),
+      radial-gradient(circle at top right, rgba(34, 211, 238, 0.12), transparent 24%),
+      radial-gradient(circle at 18% 18%, rgba(245, 158, 11, 0.12), transparent 16%),
+      radial-gradient(circle at 82% 16%, rgba(236, 72, 153, 0.08), transparent 18%);
     mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.8), transparent 85%);
   }
 
   .hero-panel {
     @apply border-slate-400/15;
     background:
-      linear-gradient(145deg, rgba(11, 18, 32, 0.96), rgba(2, 6, 23, 0.88)),
-      radial-gradient(circle at top right, rgba(56, 189, 248, 0.16), transparent 24%),
-      radial-gradient(circle at 18% 18%, rgba(245, 158, 11, 0.12), transparent 20%),
-      radial-gradient(circle at 75% 65%, rgba(34, 197, 94, 0.08), transparent 18%);
+      linear-gradient(145deg, rgba(8, 14, 28, 0.98), rgba(2, 6, 23, 0.92)),
+      radial-gradient(circle at top right, rgba(56, 189, 248, 0.18), transparent 24%),
+      radial-gradient(circle at 18% 18%, rgba(245, 158, 11, 0.14), transparent 20%),
+      radial-gradient(circle at 75% 65%, rgba(236, 72, 153, 0.08), transparent 18%);
   }
 
   .market-session--jp.hero-panel {
@@ -211,7 +212,7 @@
   }
 
   .panel-title {
-    @apply text-[11px] font-semibold tracking-[0.18em] text-sky-300;
+    @apply text-[11px] font-semibold tracking-[0.18em] text-cyan-300;
   }
 
   .metric-label {
@@ -223,11 +224,11 @@
   }
 
   .metric-card {
-    @apply rounded-2xl border border-slate-400/15 bg-[#0f172a]/70 px-4 py-3.5 shadow-[0_18px_48px_-36px_rgba(0,0,0,0.5)] backdrop-blur-xl transition-all duration-200 hover:border-slate-300/25 hover:bg-[#111c33]/90 hover:shadow-[0_24px_58px_-34px_rgba(56,189,248,0.1)];
+    @apply rounded-2xl border border-slate-400/15 bg-[#09111f] px-4 py-3.5 shadow-[0_18px_48px_-36px_rgba(0,0,0,0.48)] backdrop-blur-xl transition-all duration-200 hover:border-slate-300/25 hover:bg-[#0c1728] hover:shadow-[0_24px_58px_-34px_rgba(56,189,248,0.12)];
   }
 
   .metric-card--hero {
-    @apply border-slate-300/15 bg-[#0b1220]/90 p-5;
+    @apply border-slate-300/15 bg-[#07111f] p-5 sm:p-6;
   }
 
   .metric-card--accent {
@@ -235,15 +236,15 @@
   }
 
   .metric-card--soft {
-    @apply bg-[#0b1220]/70;
+    @apply bg-[#07111f];
   }
 
   .metric-card--embedded {
-    @apply rounded-xl border-slate-400/10 bg-[#0f172a]/80 px-3 py-2.5;
+    @apply rounded-xl border-slate-400/10 bg-[#0f172a] px-3 py-2.5;
   }
 
   .metric-card--empty {
-    @apply border-dashed bg-[#0f172a]/70 text-center;
+    @apply border-dashed bg-[#0f172a] text-center;
   }
 
   .metric-card--danger {
@@ -251,7 +252,7 @@
   }
 
   .metric-card--risk-meta {
-    @apply border-slate-400/15 bg-[#0f172a]/75;
+    @apply border-slate-400/15 bg-[#0f172a];
   }
 
   .market-candle-chart {
@@ -259,11 +260,11 @@
   }
 
   .market-candle-chart__stats {
-    @apply rounded-[24px] border border-slate-300/10 bg-white/[0.03] p-3 shadow-[0_16px_40px_-30px_rgba(0,0,0,0.4)] backdrop-blur-xl;
+    @apply rounded-[24px] border border-slate-300/10 bg-slate-950 p-3 shadow-[0_16px_40px_-30px_rgba(0,0,0,0.4)] backdrop-blur-xl;
   }
 
   .market-candle-chart__stat {
-    @apply rounded-2xl border border-slate-300/10 bg-[#0f172a]/75 px-4 py-3;
+    @apply rounded-2xl border border-slate-300/10 bg-[#0f172a] px-4 py-3;
   }
 
   .market-candle-chart__stat-value {
@@ -271,7 +272,7 @@
   }
 
   .market-candle-chart__frame {
-    @apply relative overflow-hidden;
+    @apply relative overflow-hidden rounded-[28px];
   }
 
   .market-candle-chart__frame::before {
@@ -308,7 +309,7 @@
   }
 
   .market-candle-chart__tooltip-row {
-    @apply flex items-center justify-between gap-3 rounded-xl border border-slate-300/10 bg-white/[0.02] px-3 py-2;
+    @apply flex items-center justify-between gap-3 rounded-xl border border-slate-300/10 bg-slate-950 px-3 py-2;
   }
 
   .market-candle-chart__tooltip-label {
@@ -368,29 +369,30 @@
   }
 
   .action-button--secondary {
-    @apply border-slate-300/15 bg-[#0f172a]/75 text-slate-100 hover:border-slate-300/25 hover:bg-[#111c33] focus-visible:ring-sky-300/40;
+    @apply border-slate-300/15 bg-[#0f172a] text-slate-100 hover:border-slate-300/25 hover:bg-[#111c33] focus-visible:ring-sky-300/40;
   }
 
   .action-button--ghost {
-    @apply border-slate-300/15 bg-[#0f172a]/75 text-slate-100 hover:border-slate-300/25 hover:bg-[#111c33] focus-visible:ring-sky-300/40;
+    @apply border-slate-300/15 bg-[#0f172a] text-slate-100 hover:border-slate-300/25 hover:bg-[#111c33] focus-visible:ring-sky-300/40;
   }
 
   .display-title {
-    font-family: "IBM Plex Sans", "Noto Sans SC", "PingFang SC", sans-serif;
+    font-family: "Fira Code", "Noto Sans SC", "PingFang SC", monospace;
     letter-spacing: 0.01em;
   }
 
   .section-heading {
     @apply text-2xl font-semibold tracking-tight text-slate-50 sm:text-[1.75rem];
-    font-family: "IBM Plex Sans", "Noto Sans SC", "PingFang SC", sans-serif;
+    font-family: "Fira Code", "Noto Sans SC", "PingFang SC", monospace;
   }
 
   .section-copy {
     @apply text-sm leading-7 text-slate-300/80 sm:text-base;
+    font-family: "Fira Sans", "Noto Sans SC", "PingFang SC", sans-serif;
   }
 
   .data-chip {
-    @apply inline-flex min-h-11 items-center gap-3 rounded-2xl border border-slate-400/15 bg-[#0f172a]/80 px-4 py-2.5 text-sm shadow-[0_18px_50px_-28px_rgba(0,0,0,0.35)] backdrop-blur-xl;
+    @apply inline-flex min-h-11 items-center gap-3 rounded-2xl border border-slate-400/15 bg-[#0f172a] px-4 py-2.5 text-sm shadow-[0_18px_50px_-28px_rgba(0,0,0,0.35)] backdrop-blur-xl;
   }
 
   .data-chip--placeholder {
@@ -407,7 +409,9 @@
 
   .price-display {
     @apply font-mono text-4xl font-semibold tracking-tight text-amber-200 sm:text-5xl;
-    text-shadow: 0 0 14px rgba(245, 158, 11, 0.12);
+    text-shadow:
+      0 0 14px rgba(245, 158, 11, 0.18),
+      0 0 26px rgba(34, 211, 238, 0.06);
   }
 
   .price-display--compact {
@@ -415,11 +419,11 @@
   }
 
   .signal-metric {
-    @apply rounded-[24px] border border-slate-400/15 bg-[#0f172a]/80 p-4 shadow-[0_18px_50px_-28px_rgba(0,0,0,0.36)] backdrop-blur-xl;
+    @apply rounded-[24px] border border-slate-400/15 bg-[#0f172a] p-4 shadow-[0_18px_50px_-28px_rgba(0,0,0,0.36)] backdrop-blur-xl;
   }
 
   .summary-card {
-    @apply relative overflow-hidden;
+    @apply relative h-full overflow-hidden;
   }
 
   .summary-card::before {
@@ -457,15 +461,35 @@
   }
 
   .summary-lead {
-    @apply rounded-2xl border border-slate-300/15 bg-white/[0.03] px-4 py-3 text-sm leading-7 text-slate-100/90;
+    @apply rounded-2xl border border-slate-300/15 bg-slate-950 px-4 py-3 text-sm leading-7 text-slate-100/90;
+  }
+
+  .summary-lead--featured {
+    @apply border-amber-300/30 bg-amber-500/10 text-amber-50;
+  }
+
+  .hero-decision-card {
+    @apply border-slate-300/15 bg-[#07111f];
   }
 
   .summary-detail {
-    @apply rounded-2xl border border-slate-300/10 bg-[#0f172a]/75 px-3 py-2 text-sm leading-6 text-slate-200/80;
+    @apply rounded-2xl border border-slate-300/10 bg-[#0f172a] px-3 py-2 text-sm leading-6 text-slate-200/80;
+  }
+
+  .summary-detail--highlight {
+    @apply border-emerald-300/25 bg-emerald-500/10 text-emerald-50;
   }
 
   .summary-stance-row {
     @apply flex items-center justify-between gap-3;
+  }
+
+  .summary-stance-row--featured {
+    @apply rounded-2xl border border-amber-300/20 bg-amber-500/10 px-4 py-3;
+  }
+
+  .summary-stance-row--footer {
+    @apply mt-1 rounded-2xl border border-slate-300/15 bg-[#0b1220] px-4 py-3;
   }
 
   .summary-stance-label {
@@ -474,6 +498,14 @@
 
   .summary-stance {
     @apply inline-flex items-center rounded-full border px-2.5 py-1 font-mono text-[10px] font-semibold tracking-[0.18em];
+  }
+
+  .summary-stance--featured {
+    @apply px-3 py-1.5 text-[11px];
+  }
+
+  .confidence-badge {
+    @apply inline-flex items-center rounded-full border border-cyan-300/25 bg-cyan-500/10 px-3 py-1 font-mono text-sm font-semibold tracking-[0.18em] text-cyan-100;
   }
 
   .summary-stance--bullish {
@@ -493,7 +525,11 @@
   }
 
   .summary-evidence {
-    @apply flex items-start gap-3 rounded-2xl border border-slate-400/10 bg-white/[0.03] px-3 py-2.5 text-[13px] leading-6 text-slate-200/80;
+    @apply flex items-start gap-3 rounded-2xl border border-slate-400/10 bg-slate-950 px-3 py-2.5 text-[13px] leading-6 text-slate-200/80;
+  }
+
+  .summary-evidence--headline {
+    @apply items-start bg-[#0b1220];
   }
 
   .summary-evidence-index {
@@ -508,12 +544,24 @@
     @apply inline-flex items-center rounded-full border border-slate-300/15 bg-slate-50/5 px-2.5 py-1 font-mono text-[10px] tracking-[0.18em] text-slate-200/70;
   }
 
+  .analysis-badge--accent {
+    @apply border-amber-300/30 bg-amber-500/10 text-amber-100;
+  }
+
+  .analysis-badge--slate {
+    @apply border-slate-300/15 bg-slate-50/5 text-slate-200/70;
+  }
+
+  .window-insight--important {
+    @apply border-emerald-300/25 bg-emerald-500/10 text-emerald-50;
+  }
+
   .history-summary-strip {
-    @apply rounded-[28px] border border-slate-300/10 bg-[#0f172a]/60 p-3 shadow-[0_18px_50px_-34px_rgba(0,0,0,0.38)] backdrop-blur-xl;
+    @apply rounded-[28px] border border-slate-300/10 bg-[#0f172a] p-3 shadow-[0_18px_50px_-34px_rgba(0,0,0,0.38)] backdrop-blur-xl;
   }
 
   .history-summary-item {
-    @apply rounded-[22px] border border-slate-300/10 bg-white/[0.03] px-4 py-3;
+    @apply rounded-[22px] border border-slate-300/10 bg-slate-950 px-4 py-3;
   }
 
   .history-summary-value {
@@ -525,7 +573,7 @@
   }
 
   .risk-note-card--neutral {
-    @apply border-slate-300/10 bg-[#0f172a]/75 shadow-[inset_0_0_0_1px_rgba(148,163,184,0.04)];
+    @apply border-slate-300/10 bg-[#0f172a] shadow-[inset_0_0_0_1px_rgba(148,163,184,0.04)];
   }
 
   .risk-note-card--warning {

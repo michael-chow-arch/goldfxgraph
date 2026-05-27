@@ -33,6 +33,15 @@ class ResearchRunNotFoundError(ApiError):
         )
 
 
+class ResearchStatusNotFoundError(ApiError):
+    def __init__(self) -> None:
+        super().__init__(
+            type="research_status_not_found",
+            message="Research status was not found",
+            status_code=404,
+        )
+
+
 class PersistenceApiError(ApiError):
     def __init__(self, message: str = "Persistence operation failed") -> None:
         super().__init__(type="persistence_error", message=message, status_code=503)
