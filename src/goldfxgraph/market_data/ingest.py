@@ -32,9 +32,7 @@ def validate_market_data_ready(market_data: MarketDataSet, *, symbol: str | None
 
     dataset_symbol = _normalize_symbol(market_data.symbol)
     if normalized_symbol is not None and dataset_symbol != normalized_symbol:
-        raise CsvValidationError(
-            f"CSV symbol {dataset_symbol} does not match requested symbol {normalized_symbol}"
-        )
+        raise CsvValidationError(f"CSV symbol {dataset_symbol} does not match requested symbol {normalized_symbol}")
 
     return market_data
 

@@ -7,9 +7,16 @@ export const DIRECTION_LABELS: Record<ForecastDirection, string> = {
 };
 
 export const DIRECTION_STYLES: Record<ForecastDirection, string> = {
-  bullish: "border-emerald-300/35 bg-emerald-500/10 text-emerald-200",
-  bearish: "border-rose-400/35 bg-rose-500/10 text-rose-200",
-  neutral: "border-amber-300/30 bg-amber-500/10 text-amber-100",
+  bullish: "border-emerald-300/35 bg-emerald-500/10 text-emerald-800",
+  bearish: "border-rose-400/35 bg-rose-500/10 text-rose-800",
+  neutral: "border-amber-300/30 bg-amber-500/10 text-amber-800",
+};
+
+export const WINDOW_DIRECTION_LABELS: Record<string, string> = {
+  "0-3天": "0-3天",
+  "3-5天": "3-5天",
+  "6-15天": "6-15天",
+  "15天后": "15天后",
 };
 
 export const AGENT_LABELS: Record<string, string> = {
@@ -35,6 +42,39 @@ export const HISTORY_RESULT_LABELS: Record<string, string> = {
   win: "命中止盈",
   loss: "触发止损",
   flat: "持平/区间",
+};
+
+export const SCHEDULER_STATUS_LABELS: Record<string, string> = {
+  running: "运行中",
+  success: "数据加载完成",
+  failed: "已失败",
+  skipped: "已跳过",
+};
+
+export const SCHEDULER_STAGE_LABELS: Record<string, string> = {
+  scheduled: "已排程",
+  router_validate_request: "校验请求",
+  tool_load_market_data: "加载市场数据",
+  tool_ensure_market_data_freshness: "检查市场数据鲜度",
+  tool_fetch_current_gold_quote: "获取最新黄金报价",
+  tool_compute_indicators: "计算技术指标",
+  tool_fetch_macro_inputs: "拉取宏观输入",
+  tool_fetch_market_sentiment_inputs: "拉取市场情绪",
+  tool_fetch_alt_data_inputs: "拉取另类数据",
+  tool_fetch_newsflow_inputs: "拉取新闻流",
+  tool_fetch_pizza_index_inputs: "拉取 Pizza 指数",
+  tool_fetch_polymarket_inputs: "拉取 Polymarket",
+  agent_technical_analysis: "技术分析中",
+  agent_macro_analysis: "宏观分析中",
+  agent_news_analysis: "新闻分析中",
+  agent_risk_analysis: "风险分析中",
+  agent_forecast_planning: "规划预测中",
+  tool_persist_research_run: "保存研究运行",
+  tool_persist_forecast: "保存 forecast",
+  router_finalize_result: "分析完成",
+  persist_result: "分析完成",
+  failed: "执行失败",
+  completed: "分析完成",
 };
 
 export const TRADINGVIEW_SOURCE_LABEL = "TradingView 实时行情";

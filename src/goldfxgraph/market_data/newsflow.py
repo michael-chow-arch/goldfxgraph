@@ -27,6 +27,22 @@ NEWS_SOURCE_LABELS: dict[str, str] = {
 }
 
 HEADLINE_PHRASE_REPLACEMENTS: tuple[tuple[str, str], ...] = (
+    ("Will gold price rise above", "黄金价格是否会升破"),
+    ("Will the Fed cut rates in June?", "美联储6月是否降息？"),
+    ("Will the Fed cut rates in June", "美联储6月是否降息"),
+    ("Will the Fed cut rates", "美联储是否降息"),
+    ("Will", "是否会"),
+    ("rise above", "升破"),
+    ("fall below", "跌破"),
+    ("cut rates", "降息"),
+    ("by June", "在6月前"),
+    ("in June", "在6月"),
+    ("higher for longer", "利率更久维持高位"),
+    ("stronger dollar", "美元走强"),
+    ("softer inflation data", "偏弱通胀数据"),
+    ("traders watch rates", "交易员关注利率"),
+    ("holds near record highs", "维持在历史高位附近"),
+    ("rebounds as traders watch rates", "在交易员关注利率时反弹"),
     (
         "Gold Markets Frozen in Place as Iran Stalemate and Fed Hawks Battle Central Bank Buying - AD HOC NEWS",
         "黄金市场陷入横盘，伊朗僵局与美联储鹰派、央行买盘拉锯",
@@ -69,6 +85,8 @@ HEADLINE_WORD_REPLACEMENTS: tuple[tuple[str, str], ...] = (
     ("inflation", "通胀"),
     ("Risk", "风险"),
     ("risk", "风险"),
+    ("June", "6月"),
+    ("june", "6月"),
     ("markets", "市场"),
     ("market", "市场"),
     ("rates", "利率"),
@@ -227,9 +245,7 @@ def _parse_atom_items(root: ET.Element, source_name: str) -> list[dict[str, Any]
         if not title:
             continue
         link = _extract_atom_link(entry, atom_ns)
-        published_at = _parse_timestamp(
-            entry.findtext(f"{atom_ns}published") or entry.findtext(f"{atom_ns}updated")
-        )
+        published_at = _parse_timestamp(entry.findtext(f"{atom_ns}published") or entry.findtext(f"{atom_ns}updated"))
         item_source = _clean_text(entry.findtext(f"{atom_ns}source/{atom_ns}title")) or source_name
         items.append(
             {

@@ -5,7 +5,12 @@ from sqlalchemy import inspect
 
 from goldfxgraph.persistence.database import create_session_factory, init_models
 from goldfxgraph.persistence.repositories import ForecastRepository
-from goldfxgraph.schemas.forecast import AgentVote, ForecastDirection, ForecastResult
+from goldfxgraph.schemas.forecast import (
+    AgentVote,
+    ForecastDirection,
+    ForecastResult,
+    ForecastWindowDirection,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -26,7 +31,18 @@ def _forecast(
         daily_low=2035,
         daily_close=2048,
         direction=direction,
+        window_directions=[
+            ForecastWindowDirection(
+                window_label="0-3天",
+                direction=direction,
+                strength="moderate",
+                confidence=0.63,
+                reason="短线趋势延续",
+            )
+        ],
         entry_price=2049,
+        entry_price_low=2047,
+        entry_price_high=2051,
         take_profit_price=2075,
         stop_loss_price=2032,
         holding_period="1-3 days",
@@ -69,6 +85,43 @@ async def test_repository_saves_run_and_latest_forecast() -> None:
     assert loaded_run.status == "success"
     assert loaded_run.started_at.tzinfo is not None
     assert loaded_run.forecast is not None
+    assert loaded_run.forecast.window_directions[0].window_label == "0-3天"
+    assert loaded_run.forecast.entry_price_low == 2047
+    assert loaded_run.forecast.entry_price_high == 2051
+
+
+async def test_repository_persists_scheduler_run_status_snapshot() -> None:
+    session_factory = create_session_factory("sqlite+aiosqlite:///:memory:")
+    await init_models(session_factory.engine)
+    repo = ForecastRepository(session_factory)
+
+    run = await repo.create_scheduler_run(input_summary={"symbol": "XAUUSD"})
+    updated = await repo.update_scheduler_run_stage(
+        run.id,
+        current_stage="agent_technical_analysis",
+        agent_statuses=[{"agent": "technical", "status": "running"}],
+        agent_diagnostics=[
+            {
+                "agent": "technical",
+                "stage": "agent_technical_analysis",
+                "status": "failed",
+                "message": "OpenAI-compatible technical agent 调用失败，已回退到 deterministic workflow 输出。",
+                "detail": "HTTP 500",
+            }
+        ],
+    )
+    latest = await repo.get_latest_scheduler_run()
+
+    assert run.id is not None
+    assert updated.id == run.id
+    assert updated.current_stage == "agent_technical_analysis"
+    assert updated.agent_statuses == [{"agent": "technical", "status": "running"}]
+    assert updated.agent_diagnostics[0]["detail"] == "HTTP 500"
+    assert latest is not None
+    assert latest.id == run.id
+    assert latest.current_stage == "agent_technical_analysis"
+    assert latest.agent_statuses[0]["status"] == "running"
+    assert latest.agent_diagnostics[0]["agent"] == "technical"
 
 
 async def test_repository_records_failed_run() -> None:
@@ -151,7 +204,10 @@ async def test_init_models_backfills_missing_forecast_columns() -> None:
                 daily_low FLOAT NOT NULL,
                 daily_close FLOAT NOT NULL,
                 direction VARCHAR(16) NOT NULL,
+                window_directions JSON NOT NULL,
                 entry_price FLOAT,
+                entry_price_low FLOAT,
+                entry_price_high FLOAT,
                 take_profit_price FLOAT,
                 stop_loss_price FLOAT,
                 holding_period VARCHAR(255) NOT NULL,
@@ -173,10 +229,11 @@ async def test_init_models_backfills_missing_forecast_columns() -> None:
 
     async with session_factory.engine.begin() as connection:
         columns = await connection.run_sync(
-            lambda sync_connection: {
-                column["name"] for column in inspect(sync_connection).get_columns("forecasts")
-            }
+            lambda sync_connection: {column["name"] for column in inspect(sync_connection).get_columns("forecasts")}
         )
 
     assert "market_sentiment_summary" in columns
     assert "alt_data_summary" in columns
+    assert "window_directions" in columns
+    assert "entry_price_low" in columns
+    assert "entry_price_high" in columns

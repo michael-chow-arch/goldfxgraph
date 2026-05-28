@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from enum import StrEnum
 from math import isfinite
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -75,6 +75,14 @@ class AgentVote(BaseModel):
     rationale: str
 
 
+class ForecastWindowDirection(BaseModel):
+    window_label: str
+    direction: ForecastDirection
+    strength: Literal["strong", "moderate", "mild"]
+    confidence: float = Field(ge=0, le=1)
+    reason: str
+
+
 class ForecastResult(BaseModel):
     id: int | None = None
     run_id: int | None = None
@@ -88,7 +96,10 @@ class ForecastResult(BaseModel):
     daily_low: float
     daily_close: float
     direction: ForecastDirection
+    window_directions: list[ForecastWindowDirection] = Field(default_factory=list)
     entry_price: float | None = None
+    entry_price_low: float | None = None
+    entry_price_high: float | None = None
     take_profit_price: float | None = None
     stop_loss_price: float | None = None
     holding_period: str
@@ -119,6 +130,17 @@ class ForecastEvaluationResult(BaseModel):
     summary: str
     feedback_notes: list[str] = Field(default_factory=list)
     signal_coverage: dict[str, Any] = Field(default_factory=dict)
+
+
+class SchedulerRunStatus(BaseModel):
+    id: int | None = None
+    status: Literal["running", "success", "failed", "skipped"]
+    started_at: datetime
+    completed_at: datetime | None = None
+    current_stage: str
+    agent_statuses: list[dict[str, str]] = Field(default_factory=list)
+    agent_diagnostics: list[dict[str, Any]] = Field(default_factory=list)
+    last_error: str | None = None
 
 
 class ForecastHistoryItem(BaseModel):

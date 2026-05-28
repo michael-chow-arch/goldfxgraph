@@ -1,4 +1,9 @@
-import type { DailyBar, ForecastHistoryItem, ForecastResult } from "@/types/forecast";
+import type {
+  DailyBar,
+  ForecastHistoryItem,
+  ForecastResult,
+  SchedulerRunStatus,
+} from "@/types/forecast";
 import {
   TRADINGVIEW_SOURCE_ERROR_LABEL,
   TRADINGVIEW_SOURCE_UNAVAILABLE_LABEL,
@@ -153,6 +158,48 @@ export async function fetchForecastHistory(limit = 30): Promise<ForecastHistoryI
   }
 
   return JSON.parse(bodyText) as ForecastHistoryItem[];
+}
+
+export async function fetchLatestSchedulerStatus(): Promise<SchedulerRunStatus | null> {
+  let response: Response;
+
+  try {
+    response = await fetch(buildUrl("/api/v1/research-status/latest"), {
+      headers: {
+        Accept: "application/json",
+      },
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === CONFIG_ERROR_MESSAGE) {
+      throw error;
+    }
+
+    throw new Error("网络连接失败，暂时无法获取最新调度状态。");
+  }
+
+  if (response.status === 404 || response.status === 204) {
+    return null;
+  }
+
+  if (!response.ok) {
+    let message = "无法加载最新调度状态";
+    let payload: ApiErrorEnvelope | null = null;
+
+    try {
+      payload = (await response.json()) as ApiErrorEnvelope;
+    } catch {
+      payload = null;
+    }
+
+    throw new Error(formatRuntimeErrorMessage(message, payload, response, false));
+  }
+
+  const bodyText = await response.text();
+  if (!bodyText.trim()) {
+    return null;
+  }
+
+  return JSON.parse(bodyText) as SchedulerRunStatus;
 }
 
 export async function fetchRecentMarketBars(symbol = "XAUUSD", limit = 60): Promise<DailyBar[]> {

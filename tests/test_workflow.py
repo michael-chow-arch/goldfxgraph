@@ -30,6 +30,7 @@ from goldfxgraph.workflow.nodes import (
     tool_fetch_market_sentiment_inputs,
     tool_fetch_newsflow_inputs,
     tool_fetch_pizza_index_inputs,
+    tool_fetch_polymarket_inputs,
     tool_persist_forecast,
     tool_persist_research_run,
 )
@@ -66,6 +67,7 @@ def test_graph_contains_required_node_names() -> None:
         "tool_fetch_alt_data_inputs",
         "tool_fetch_newsflow_inputs",
         "tool_fetch_pizza_index_inputs",
+        "tool_fetch_polymarket_inputs",
         "agent_market_sentiment_analysis",
         "agent_alt_data_analysis",
     }.issubset(set(graph.nodes))
@@ -162,12 +164,39 @@ def test_forecast_planning_output_is_structured() -> None:
     )
 
     assert forecast.direction in {ForecastDirection.bullish, ForecastDirection.bearish, ForecastDirection.neutral}
+    assert [item.window_label for item in forecast.window_directions] == ["0-3天", "3-5天", "6-15天", "15天后"]
     assert forecast.entry_price is not None and forecast.entry_price > 0
     assert forecast.take_profit_price is not None and forecast.take_profit_price > 0
     assert forecast.stop_loss_price is not None and forecast.stop_loss_price > 0
     assert forecast.agent_votes
     assert forecast.risk_notes
     assert "不构成金融建议" in forecast.disclaimer
+
+
+def test_forecast_planning_uses_range_for_neutral_direction() -> None:
+    bars = _bars()
+    indicators = compute_technical_indicators(bars)
+    neutral_indicators = indicators.model_copy(
+        update={"sma_20": bars[-1].close, "ema_12": bars[-1].close, "rsi_14": 50.0}
+    )
+    quote = CurrentQuote(
+        current_price=bars[-1].close,
+        data_source="TradingView",
+        data_timestamp=datetime.now(UTC),
+    )
+
+    forecast = create_research_forecast_from_inputs(
+        latest_bar=bars[-1],
+        quote=quote,
+        indicators=neutral_indicators,
+    )
+
+    assert forecast.direction == ForecastDirection.neutral
+    assert forecast.entry_price_low is not None
+    assert forecast.entry_price_high is not None
+    assert forecast.entry_price_low < forecast.entry_price_high
+    assert "震荡区间" in forecast.intraday_action
+    assert "聪明钱" in forecast.technical_summary
 
 
 def test_tool_fetch_current_gold_quote_uses_tradingview_source(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -412,8 +441,10 @@ def test_agent_node_reports_placeholder_secret_as_unconfigured() -> None:
     state = agent_technical_analysis(state)
 
     assert called is False
-    assert any("未配置有效 base_url/model/API Key" in note for note in state.get("risk_notes", []))
     assert state.get("technical_summary", "").startswith("当前报价")
+    assert state.get("agent_diagnostics") is not None
+    assert state["agent_diagnostics"][0]["agent"] == "technical"
+    assert "未配置有效 base_url/model/API Key" in state["agent_diagnostics"][0]["message"]
 
 
 def test_forecast_planning_aligns_direction_and_levels_with_agent_votes() -> None:
@@ -481,7 +512,9 @@ def test_forecast_planning_includes_recent_feedback_history() -> None:
     assert "最近评估反馈" in forecast.risk_summary
 
 
-def test_agent_node_falls_back_deterministically_when_openai_response_is_invalid() -> None:
+def test_agent_node_falls_back_deterministically_when_openai_response_is_invalid(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     bars = _bars()
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -499,6 +532,7 @@ def test_agent_node_falls_back_deterministically_when_openai_response_is_invalid
         agent_http_transport=httpx.MockTransport(handler),
     )
 
+    caplog.set_level("WARNING")
     state = agent_technical_analysis(state)
 
     assert state.get("technical_summary", "").startswith("当前报价")
@@ -506,9 +540,13 @@ def test_agent_node_falls_back_deterministically_when_openai_response_is_invalid
     assert agent_votes is not None
     assert agent_votes[0].agent == "technical"
     assert agent_votes[0].direction == ForecastDirection.bullish
-    assert state.get("risk_notes") == [
+    assert state.get("agent_diagnostics") is not None
+    assert state["agent_diagnostics"][0]["agent"] == "technical"
+    assert state["agent_diagnostics"][0]["message"] == (
         "OpenAI-compatible technical agent 调用失败，已回退到 deterministic workflow 输出。"
-    ]
+    )
+    assert "OpenAI-compatible response returned invalid JSON for technical" in caplog.text
+    assert state["agent_diagnostics"][0]["detail"] == "OpenAI-compatible response returned invalid JSON for technical"
 
 
 def test_sentiment_and_alt_data_nodes_fallback_to_structured_summaries_without_openai() -> None:
@@ -527,7 +565,8 @@ def test_sentiment_and_alt_data_nodes_fallback_to_structured_summaries_without_o
     state = agent_market_sentiment_analysis(state)
     state = agent_alt_data_analysis(state)
 
-    assert state.get("market_sentiment_summary", "").startswith("市场情绪按")
+    assert state.get("market_sentiment_summary", "").startswith("主判断：市场情绪按")
+    assert "参考依据：" in state.get("market_sentiment_summary", "")
     assert "披萨指数" in state.get("alt_data_summary", "")
     assert state.get("market_sentiment_votes")
     assert state.get("alt_data_votes")
@@ -591,6 +630,97 @@ def test_sentiment_and_alt_data_nodes_use_external_signals_when_available() -> N
     assert "美元指数" in state["alt_data_summary"]
     assert "实际利率" in state["alt_data_summary"]
     assert "CFTC" in state["market_sentiment_summary"] or "净多头" in state["market_sentiment_summary"]
+
+
+def test_polymarket_inputs_feed_market_sentiment_summary() -> None:
+    bars = _bars()
+    quote = _quote()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "polymarket.com":
+            payload = json.dumps(
+                {
+                    "props": {
+                        "pageProps": {
+                            "markets": [
+                                {
+                                    "question": "Will gold price rise above $4500 by June?",
+                                    "slug": "gold-4500",
+                                    "yesPrice": 0.63,
+                                    "liquidity": 120000,
+                                    "volume": 300000,
+                                    "endDate": "2026-06-30T00:00:00Z",
+                                },
+                                {
+                                    "question": "Will the Fed cut rates in June?",
+                                    "slug": "fed-cut",
+                                    "yesPrice": 0.58,
+                                    "liquidity": 90000,
+                                    "volume": 200000,
+                                    "endDate": "2026-06-30T00:00:00Z",
+                                },
+                                {
+                                    "question": "Will the local baseball team win?",
+                                    "slug": "sports",
+                                    "yesPrice": 0.4,
+                                },
+                            ]
+                        }
+                    }
+                },
+                ensure_ascii=False,
+            )
+            return httpx.Response(
+                200,
+                text=(
+                    "<!doctype html><html><head>"
+                    "<script id='__NEXT_DATA__' type='application/json'>"
+                    f"{payload}"
+                    "</script></head><body></body></html>"
+                ),
+                request=request,
+            )
+        if request.url.host == "publicreporting.cftc.gov":
+            return httpx.Response(
+                200,
+                text=(
+                    '"report_date_as_yyyy_mm_dd","commodity_name","open_interest_all",'
+                    '"noncomm_positions_long_all","noncomm_positions_short_all",'
+                    '"comm_positions_long_all","comm_positions_short_all"\n'
+                    '"2026-05-19T00:00:00.000","GOLD","379325","211018","51185","69520","261149"\n'
+                    '"2026-05-12T00:00:00.000","GOLD","378000","209000","53000","69000","260000"\n'
+                ),
+                request=request,
+            )
+        raise AssertionError(f"unexpected request url: {request.url}")
+
+    state = WorkflowState(
+        settings=GoldFXGraphSettings(openai_base_url=None, openai_model=None),
+        latest_bar=bars[-1],
+        quote=quote,
+        indicators=compute_technical_indicators(bars),
+        forecast_feedback_history=["上一轮看多后回撤偏大"],
+        signal_http_transport=httpx.MockTransport(handler),
+        newsflow_inputs={
+            "status": "available",
+            "headline_count": 2,
+            "source_count": 1,
+            "sentiment": "bullish",
+            "topics": ["Gold"],
+        },
+    )
+
+    state = tool_fetch_polymarket_inputs(state)
+    state = tool_fetch_market_sentiment_inputs(state)
+    state = agent_market_sentiment_analysis(state)
+
+    polymarket_inputs = state.get("polymarket_inputs")
+    assert polymarket_inputs is not None
+    assert polymarket_inputs["status"] == "available"
+    assert polymarket_inputs["gold_related_market_count"] >= 2
+    assert "polymarket" in state.get("market_sentiment_inputs", {}).get("available_signals", [])
+    assert "Polymarket" in state.get("market_sentiment_summary", "")
+    assert "黄金" in state.get("market_sentiment_summary", "")
 
 
 def test_newsflow_node_uses_mainstream_media_rss_when_available() -> None:
@@ -663,6 +793,8 @@ def test_newsflow_node_uses_mainstream_media_rss_when_available() -> None:
     assert "新闻流已从" in state.get("news_summary", "")
     assert "美联储" in state.get("news_summary", "")
     assert "黄金" in state.get("news_summary", "")
+    assert "路透社" in state.get("news_summary", "")
+    assert "Gold edges higher" not in state.get("news_summary", "")
 
 
 def test_pizza_index_node_uses_public_dashboard_snapshot_when_available() -> None:
@@ -760,7 +892,7 @@ def test_market_sentiment_agent_ignores_blank_remote_summary(monkeypatch: pytest
     state = tool_fetch_market_sentiment_inputs(state)
     state = agent_market_sentiment_analysis(state)
 
-    assert state.get("market_sentiment_summary", "").startswith("市场情绪按")
+    assert state.get("market_sentiment_summary", "").startswith("主判断：市场情绪按")
     assert state["market_sentiment_summary"].strip() != ""
 
 
