@@ -7,9 +7,9 @@ export const DIRECTION_LABELS: Record<ForecastDirection, string> = {
 };
 
 export const DIRECTION_STYLES: Record<ForecastDirection, string> = {
-  bullish: "border-emerald-300/35 bg-emerald-500/10 text-emerald-200",
-  bearish: "border-rose-400/35 bg-rose-500/10 text-rose-200",
-  neutral: "border-amber-300/30 bg-amber-500/10 text-amber-100",
+  bullish: "border-emerald-300/35 bg-emerald-500/10 text-emerald-800",
+  bearish: "border-rose-400/35 bg-rose-500/10 text-rose-800",
+  neutral: "border-amber-300/30 bg-amber-500/10 text-amber-800",
 };
 
 export const WINDOW_DIRECTION_LABELS: Record<string, string> = {

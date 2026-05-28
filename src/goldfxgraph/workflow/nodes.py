@@ -905,6 +905,7 @@ def agent_news_analysis(state: WorkflowState) -> WorkflowState:
     inputs = state.get("newsflow_inputs", {})
     fallback_summary = _news_summary(inputs)
     summary = _summary_or_fallback(remote.summary if remote else None, fallback_summary)
+    summary = _normalize_news_summary_representative_titles(summary, fallback_summary)
     if "代表性标题" not in summary and fallback_summary:
         summary = _append_summary_section(summary, "重点·参考新闻", fallback_summary)
     vote = AgentVote(
@@ -1413,6 +1414,22 @@ def _append_summary_section(summary: str, title: str, body: str | None) -> str:
     return f"{summary}{separator}{title}：{cleaned_body}"
 
 
+def _normalize_news_summary_representative_titles(summary: str, fallback_summary: str) -> str:
+    summary_lines = summary.splitlines()
+    fallback_lines = fallback_summary.splitlines()
+    summary_marker_index = next((index for index, line in enumerate(summary_lines) if line.strip() == "代表性标题："), -1)
+    fallback_marker_index = next((index for index, line in enumerate(fallback_lines) if line.strip() == "代表性标题："), -1)
+    if summary_marker_index < 0 or fallback_marker_index < 0:
+        return summary
+
+    prefix = summary_lines[: summary_marker_index + 1]
+    fallback_block = fallback_lines[fallback_marker_index + 1 :]
+    if not fallback_block:
+        return summary
+
+    return "\n".join([*prefix, *fallback_block])
+
+
 def _merge_notes(base_notes: list[str] | None, extra_notes: list[str] | None) -> list[str]:
     merged: list[str] = []
     for note in [*(base_notes or []), *(extra_notes or [])]:
@@ -1579,10 +1596,16 @@ def _market_sentiment_summary(inputs: dict[str, object]) -> str:
         polymarket_text = f"Polymarket 已识别到 {polymarket_count} 个与黄金相关的市场，{bias_text}"
         if summary:
             polymarket_text = f"{polymarket_text}；{summary}"
-    return (
-        f"市场情绪按{_direction_label_cn(trend_bias)}方向解读，{rsi_text}，{cftc_text}，"
-        f"{newsflow_text}，{polymarket_text}，{feedback_text}{unavailable_text}。"
-    )
+    reference_items = [
+        rsi_text,
+        cftc_text,
+        newsflow_text,
+        polymarket_text,
+        f"{feedback_text}{unavailable_text}".strip("，。"),
+    ]
+    lines = [f"主判断：市场情绪按{_direction_label_cn(trend_bias)}方向解读。", "参考依据："]
+    lines.extend(f"- {item}。" for item in reference_items if item)
+    return "\n".join(lines)
 
 
 def _market_sentiment_direction(inputs: dict[str, object]) -> ForecastDirection:
