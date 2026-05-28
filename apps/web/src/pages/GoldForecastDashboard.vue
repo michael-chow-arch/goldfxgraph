@@ -16,7 +16,7 @@
             <h1 class="display-title text-balance text-3xl font-semibold tracking-tight text-[#eff7ff] sm:text-4xl lg:text-5xl">
               Multi-Agent 预测分析看板
             </h1>
-            <p class="max-w-3xl text-xs leading-6 text-slate-300/60 sm:text-sm">
+            <p class="max-w-3xl text-xs leading-6 text-slate-600 sm:text-sm">
               页面会自动轮询最新研究结果和调度状态，当前显示内容始终来自最新一次可用快照。
             </p>
           </div>
@@ -33,88 +33,105 @@
             <span class="data-chip data-chip--placeholder">等待置信度快照</span>
           </div>
 
-          <div v-if="forecast" class="grid gap-4 xl:grid-cols-12">
-            <article class="metric-card metric-card--hero xl:col-span-5">
-              <div class="flex items-start justify-between gap-4">
-                <div class="space-y-2">
-                  <p class="panel-title">当前价格</p>
-                  <p class="price-display">
-                    {{ forecast ? formatPrice(forecast.current_price) : "—" }}
+          <div v-if="forecast" class="grid gap-4">
+            <section class="hero-summary-panel">
+              <div class="hero-summary-grid">
+                <div class="hero-summary-column hero-summary-column--lead">
+                  <div class="space-y-2">
+                    <p class="panel-title">当前价格</p>
+                    <p class="price-display">
+                      {{ forecast ? formatPrice(forecast.current_price) : "—" }}
+                    </p>
+                    <p class="text-xs tracking-[0.18em] text-slate-600 sm:text-sm">
+                      XAUUSD · {{ forecast ? forecast.symbol : "等待 TradingView 快照" }}
+                    </p>
+                  </div>
+
+                  <div class="mt-4 flex flex-wrap gap-3">
+                    <span class="status-pill" :class="schedulerStatusClass">
+                      {{ schedulerStatusLabel }}
+                    </span>
+                    <span v-if="schedulerStatus" class="status-pill status-pill--neutral">
+                      {{ schedulerStageLabel }}
+                    </span>
+                    <span v-if="schedulerStatus" class="status-pill status-pill--neutral">
+                      最新执行 {{ latestExecutionTime }}
+                    </span>
+                  </div>
+
+                  <p v-if="statusErrorMessage" class="mt-3 text-xs leading-6 text-amber-100/80">
+                    {{ statusErrorMessage }}
                   </p>
-                  <p class="text-xs tracking-[0.18em] text-slate-300/70 sm:text-sm">
-                    XAUUSD · {{ forecast ? forecast.symbol : "等待 TradingView 快照" }}
-                  </p>
+
+                  <div v-if="schedulerAgentChips.length > 0" class="hero-summary-agent-divider mt-4" aria-hidden="true" />
+                  <div v-if="schedulerAgentChips.length > 0" class="hero-summary-agent-strip mt-4">
+                    <p class="hero-summary-agent-title">智能体状态</p>
+                    <div class="hero-summary-agent-list">
+                      <span v-for="chip in schedulerAgentChips" :key="chip.label" class="agent-state-chip" :title="chip.value">
+                        <span class="agent-state-chip__dot" :class="chip.dotClass" />
+                        <span class="agent-state-chip__label">{{ chip.label }}</span>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="hero-summary-column hero-summary-column--direction">
+                  <div class="flex items-center justify-between gap-3">
+                    <div class="space-y-1">
+                      <p class="metric-label">当日方向</p>
+                      <span class="text-[11px] tracking-[0.18em] text-slate-500">核心结论</span>
+                    </div>
+                    <span class="analysis-badge analysis-badge--accent">主判断</span>
+                  </div>
+                  <div class="mt-3 flex flex-wrap items-center gap-3">
+                    <span class="status-pill" :class="directionClass">{{ directionLabel }}</span>
+                    <span class="confidence-chip">
+                      <span class="confidence-chip__label">置信度</span>
+                      <span class="confidence-chip__value">{{ forecast ? formatPercent(forecast.confidence_score) : "0%" }}</span>
+                    </span>
+                  </div>
+                  <div
+                    class="confidence-scale mt-3"
+                    role="progressbar"
+                    :aria-valuenow="confidenceValue"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    :aria-label="forecast ? `置信度 ${formatPercent(forecast.confidence_score)}，总量 100%` : '置信度 0%，总量 100%'"
+                  >
+                    <div class="confidence-scale__track">
+                      <div class="confidence-scale__fill" :style="confidenceBarStyle" />
+                    </div>
+                    <div class="confidence-scale__labels">
+                      <span>0%</span>
+                      <span>100%</span>
+                    </div>
+                  </div>
+                  <div class="mt-4 space-y-2 text-sm leading-7 text-slate-700">
+                    <p class="hero-summary-note">主判断：{{ directionLabel }}，置信度 {{ forecast ? formatPercent(forecast.confidence_score) : "0%" }}。</p>
+                    <p v-if="forecast" class="hero-summary-note">持有周期：{{ forecast.holding_period }}</p>
+                  </div>
+                </div>
+
+                <div class="hero-summary-column hero-summary-column--meta">
+                  <div class="flex items-center justify-between gap-3">
+                    <div class="space-y-1">
+                      <p class="metric-label">实时元数据</p>
+                      <span class="text-[11px] tracking-[0.18em] text-slate-500">来源与时间</span>
+                    </div>
+                    <span class="analysis-badge analysis-badge--accent">元数据</span>
+                  </div>
+                  <dl class="mt-4 space-y-3">
+                    <div v-for="metric in heroMetaCards" :key="metric.label" class="hero-summary-row">
+                      <dt class="hero-summary-row__label">{{ metric.label }}</dt>
+                      <dd class="hero-summary-row__value">{{ metric.value }}</dd>
+                    </div>
+                  </dl>
                 </div>
               </div>
 
-              <div class="mt-4 flex flex-wrap gap-3">
-                <span class="status-pill" :class="schedulerStatusClass">
-                  {{ schedulerStatusLabel }}
-                </span>
-                <span v-if="schedulerStatus" class="status-pill status-pill--neutral">
-                  {{ schedulerStageLabel }}
-                </span>
-                <span v-if="schedulerStatus" class="status-pill status-pill--neutral">
-                  最新执行 {{ latestExecutionTime }}
-                </span>
-              </div>
-
-              <p v-if="statusErrorMessage" class="mt-3 text-xs leading-6 text-amber-100/80">
-                {{ statusErrorMessage }}
-              </p>
-            </article>
-
-            <article class="metric-card metric-card--soft xl:col-span-4">
-              <div class="flex items-center justify-between gap-3">
-                <div class="space-y-1">
-                  <p class="metric-label">当日方向</p>
-                  <span class="text-[11px] tracking-[0.18em] text-slate-300/55">核心结论</span>
-                </div>
-                <span class="analysis-badge analysis-badge--accent">主判断</span>
-              </div>
-              <div class="mt-3 flex flex-wrap items-center gap-3">
-                <span class="status-pill" :class="directionClass">{{ directionLabel }}</span>
-                <span class="confidence-badge">{{ forecast ? formatPercent(forecast.confidence_score) : "0%" }}</span>
-              </div>
-              <div
-                class="mt-3 h-2 overflow-hidden rounded-full bg-[#0b1d13]"
-                role="progressbar"
-                :aria-valuenow="confidenceValue"
-                aria-valuemin="0"
-                aria-valuemax="100"
-                :aria-label="forecast ? `置信度 ${formatPercent(forecast.confidence_score)}` : '置信度 0%'"
-              >
-                <div class="h-full rounded-full bg-gradient-to-r from-cyan-400 via-emerald-400 to-amber-300" :style="confidenceBarStyle" />
-              </div>
-            </article>
-
-            <article class="metric-card metric-card--soft xl:col-span-3">
-              <div class="flex items-center justify-between gap-3">
-                <div class="space-y-1">
-                  <p class="metric-label">实时元数据</p>
-                  <span class="text-[11px] tracking-[0.18em] text-slate-300/55">来源与时间</span>
-                </div>
-                <span class="analysis-badge analysis-badge--accent">透明</span>
-              </div>
-              <dl class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
-                <div v-for="metric in heroMetaCards" :key="metric.label" class="metric-card metric-card--embedded">
-                  <dt class="metric-label">{{ metric.label }}</dt>
-                  <dd class="mt-1 break-words font-mono text-sm font-medium text-slate-50 sm:text-base">
-                    {{ metric.value }}
-                  </dd>
-                </div>
-              </dl>
-            </article>
+            </section>
           </div>
 
-          <div v-if="schedulerAgentChips.length > 0" class="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-            <div v-for="chip in schedulerAgentChips" :key="chip.label" class="metric-card metric-card--embedded">
-              <div class="flex items-center justify-between gap-3">
-                <p class="metric-label">{{ chip.label }}</p>
-                <span class="status-pill" :class="chip.className">{{ chip.value }}</span>
-              </div>
-            </div>
-          </div>
         </div>
       </header>
 
@@ -150,7 +167,7 @@
             <p class="panel-title text-sky-300">加载失败</p>
             <h2 class="section-heading">TradingView 实时行情暂不可用</h2>
             <p class="section-copy max-w-2xl">{{ errorMessage }}</p>
-            <p class="section-copy max-w-2xl text-slate-300/60">系统会继续自动轮询，等待下一次可用快照恢复展示。</p>
+            <p class="section-copy max-w-2xl text-slate-600">系统会继续自动轮询，等待下一次可用快照恢复展示。</p>
           </div>
         </div>
       </section>
@@ -177,315 +194,36 @@
               <p class="panel-title">结构化交易字段</p>
               <h2 class="section-heading">入场、止盈、止损与持有框架</h2>
               <p class="section-copy max-w-3xl">
-                这一段单独展示交易执行字段，避免与方向窗口和研究摘要混在一起，便于快速扫读。
+                根据分析和预测，偏向当日的入场策略。
               </p>
             </div>
-            <span class="font-mono text-[11px] tracking-[0.18em] text-slate-300/55">trade setup</span>
+            <span class="font-mono text-[11px] tracking-[0.18em] text-slate-500">trade setup</span>
           </div>
 
           <div class="mt-4 grid gap-4 lg:grid-cols-3">
-            <article v-for="card in tradeLevelCards" :key="card.label" class="metric-card metric-card--soft">
-              <p class="metric-label">{{ card.label }}</p>
-              <p class="metric-value mt-2 text-xl">{{ card.value }}</p>
+            <article v-for="card in tradeLevelCards" :key="card.label" class="trade-field-row">
+              <span class="analysis-badge analysis-badge--slate">{{ card.label }}</span>
+              <p class="trade-field-row__value">{{ card.value }}</p>
             </article>
           </div>
 
           <div class="mt-4 grid gap-4 xl:grid-cols-3">
-            <article class="summary-detail">
-              <div class="mb-2 flex items-center justify-between gap-3">
-                <span class="analysis-badge analysis-badge--slate">风险回报比</span>
-                <span class="analysis-badge analysis-badge--accent">行动参考</span>
-              </div>
-              <p class="text-lg font-semibold text-slate-900">{{ riskRewardRatio }}</p>
+            <article class="trade-field-row">
+              <span class="analysis-badge analysis-badge--slate">风险回报比</span>
+              <p class="trade-field-row__value">{{ riskRewardRatio }}</p>
             </article>
-            <article class="summary-lead summary-lead--featured">
-              <div class="mb-2 flex items-center justify-between gap-3">
-                <span class="analysis-badge analysis-badge--slate">持有周期</span>
-                <span class="analysis-badge analysis-badge--accent">重点</span>
-              </div>
-              <p>{{ forecast.holding_period }}</p>
+            <article class="trade-field-row">
+              <span class="analysis-badge analysis-badge--slate">持有周期</span>
+              <p class="trade-field-row__value">{{ forecast.holding_period }}</p>
             </article>
-            <article class="summary-detail">
-              <div class="mb-2 flex items-center justify-between gap-3">
-                <span class="analysis-badge analysis-badge--slate">日内 / 中长期</span>
-                <span class="analysis-badge analysis-badge--accent">研究</span>
-              </div>
-              <p class="leading-7">{{ forecast.intraday_action }}</p>
-              <p class="mt-3 leading-7 text-slate-700">{{ forecast.long_term_action }}</p>
-            </article>
-          </div>
-        </section>
-
-        <section class="dashboard-panel rounded-[28px] px-5 py-6 sm:px-6 lg:px-8">
-          <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-            <div class="space-y-2">
-              <p class="panel-title">时间窗判断</p>
-              <h2 class="section-heading">0-3 / 3-5 / 6-15 / 15天后</h2>
-              <p class="section-copy max-w-3xl">
-                每个时间窗单独成段展示，主判断、补充判断和重点信息分层呈现，避免和其他模块混在一起。
-              </p>
-            </div>
-            <span class="font-mono text-[11px] tracking-[0.18em] text-slate-300/55">window outlook</span>
-          </div>
-
-          <div v-if="windowDirectionCards.length > 0" class="mt-4 grid gap-4 xl:grid-cols-2">
-            <article
-              v-for="window in windowDirectionCards"
-              :key="window.label"
-              class="metric-card metric-card--soft space-y-3 min-h-[210px]"
-            >
-              <div class="flex items-center justify-between gap-3">
-                <p class="font-mono text-xs tracking-[0.18em] text-slate-300/70">{{ window.label }}</p>
-                <span class="status-pill" :class="window.directionClass">{{ window.directionLabel }}</span>
-              </div>
-              <div class="flex flex-wrap items-center gap-2 text-xs tracking-[0.12em] text-slate-300/70">
-                <span class="rounded-full border border-slate-400/15 bg-[#0b1220]/70 px-2 py-1">{{ window.strength }}</span>
-                <span class="rounded-full border border-slate-400/15 bg-[#0b1220]/70 px-2 py-1">{{ window.confidence }}</span>
-                <span v-if="window.focusTag" class="rounded-full border border-amber-300/20 bg-amber-500/10 px-2 py-1 text-amber-100">{{ window.focusTag }}</span>
-              </div>
-              <div class="space-y-2">
-                <div class="rounded-2xl border border-slate-300/15 bg-white/[0.03] px-3 py-2 text-sm leading-6 text-slate-100/90" :class="window.primaryReasonClass">
-                  <div class="mb-2 flex items-center justify-between gap-3">
-                    <span class="font-mono text-[10px] tracking-[0.18em] text-slate-300/55">主判断</span>
-                    <span class="analysis-badge" :class="window.primaryBadgeClass">{{ window.primaryBadgeLabel }}</span>
-                  </div>
-                  <p>{{ window.primaryReason }}</p>
-                </div>
-                <div v-if="window.secondaryReasons.length > 0" class="space-y-2">
-                  <div class="flex items-center justify-between gap-3">
-                    <span class="font-mono text-[10px] tracking-[0.18em] text-slate-300/55">补充判断</span>
-                    <span class="font-mono text-[10px] tracking-[0.18em] text-slate-300/45">由 agent 自由补充</span>
-                  </div>
-                  <div
-                    v-for="item in window.secondaryReasons"
-                    :key="`${window.label}-${item.tag}-${item.text}`"
-                    class="rounded-2xl border border-slate-300/10 bg-[#0f172a]/75 px-3 py-2 text-sm leading-6 text-slate-200/80"
-                    :class="item.important ? 'window-insight--important' : ''"
-                  >
-                    <div class="mb-2 flex items-center justify-between gap-3">
-                      <span class="analysis-badge" :class="item.tagClass">{{ item.tag }}</span>
-                      <span v-if="item.important" class="analysis-badge analysis-badge--accent">重点</span>
-                    </div>
-                    <p>{{ item.text }}</p>
-                  </div>
-                </div>
+            <article class="trade-field-row trade-field-row--stacked">
+              <span class="analysis-badge analysis-badge--slate">日内 / 中长期</span>
+              <div class="summary-flat-row__body">
+                <p class="summary-flat-row__text leading-7">{{ forecast.intraday_action }}</p>
+                <p class="mt-3 text-sm leading-7 text-slate-700">{{ forecast.long_term_action }}</p>
               </div>
             </article>
           </div>
-        </section>
-
-        <section class="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.85fr)]">
-          <article class="dashboard-panel market-candle-shell rounded-[28px] p-5 sm:p-6">
-            <MarketCandlestickChart
-              :bars="marketBars"
-              :current-price="forecast?.current_price ?? null"
-              title="K线图"
-              subtitle="黄金日线结构"
-              description="TradingView 行情每 15 分钟抓取一次，展示最近日线结构、收盘节奏、波动区间与价格参考线。"
-            />
-          </article>
-
-          <aside class="space-y-4">
-            <article class="dashboard-panel rounded-[28px] p-5 sm:p-6">
-              <div class="flex items-center justify-between gap-3">
-                <div class="space-y-2">
-                  <p class="panel-title">日线快照</p>
-                  <h2 class="section-heading">价格结构</h2>
-                </div>
-                <span class="font-mono text-[11px] tracking-[0.18em] text-slate-300/55">行情数据</span>
-              </div>
-
-              <div v-if="isMarketBarsLoading" class="metric-card metric-card--empty mt-4 text-sm text-slate-200/65">
-                {{ LOADING_MARKET_BARS_MESSAGE }}
-              </div>
-              <div v-else-if="marketBarsErrorMessage" class="metric-card metric-card--danger mt-4 text-sm text-rose-100">
-                {{ marketBarsErrorMessage }}
-              </div>
-              <div v-else-if="latestMarketBar" class="mt-4 space-y-3">
-                <div class="metric-card metric-card--soft">
-                  <p class="metric-label">日期</p>
-                  <p class="metric-value mt-1 text-base">{{ formatDateShort(latestMarketBar.date) }}</p>
-                </div>
-                <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
-                  <div class="metric-card metric-card--soft">
-                    <p class="metric-label">收盘</p>
-                    <p class="metric-value mt-1 text-base">{{ formatPrice(latestMarketBar.close) }}</p>
-                  </div>
-                  <div class="metric-card metric-card--soft">
-                    <p class="metric-label">来源</p>
-                    <p class="metric-value mt-1 text-base">
-                      {{ formatRuntimeSourceLabel(latestMarketBar.source ?? forecast?.data_source) }}
-                    </p>
-                  </div>
-                </div>
-                <div class="metric-card metric-card--accent">
-                  <p class="metric-label">15分钟抓取说明</p>
-                  <p class="mt-2 text-sm leading-6 text-slate-100/80">
-                    TradingView 行情每 15 分钟抓取一次，最近一根日线用于辅助判断波动结构与风险边界。
-                  </p>
-                </div>
-              </div>
-              <div v-else class="metric-card metric-card--empty mt-4 text-sm text-slate-200/65">
-                {{ EMPTY_MARKET_BARS_MESSAGE }}
-              </div>
-            </article>
-
-            <article class="dashboard-panel rounded-[28px] p-5 sm:p-6">
-              <div class="flex items-center justify-between gap-3">
-                <div class="space-y-2">
-                  <p class="panel-title">实时元数据</p>
-                  <h2 class="section-heading">研究透明度信息</h2>
-                </div>
-                <span class="font-mono text-[11px] tracking-[0.18em] text-slate-300/55">来源与时间</span>
-              </div>
-
-              <dl class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
-                <div v-for="metric in supportCards" :key="metric.label" class="metric-card metric-card--soft">
-                  <dt class="metric-label">{{ metric.label }}</dt>
-                  <dd class="mt-1 break-words font-mono text-sm font-medium text-slate-50 sm:text-base">
-                    {{ metric.value }}
-                  </dd>
-                </div>
-              </dl>
-            </article>
-          </aside>
-        </section>
-
-        <section class="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(380px,0.8fr)]">
-          <article class="dashboard-panel rounded-[28px] p-5 sm:p-6">
-            <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-              <div class="space-y-2">
-                <p class="panel-title">研究摘要</p>
-                <h2 class="section-heading">本轮 XAUUSD 研究结论</h2>
-                <p class="text-xs tracking-[0.16em] text-slate-300/60">
-                  结论时间：{{ formatDateTime(forecast.reference_time) }}
-                </p>
-              </div>
-              <span class="font-mono text-[11px] tracking-[0.18em] text-slate-300/55">结构化摘要</span>
-            </div>
-
-            <div class="mt-4 grid gap-3 xl:grid-cols-12">
-              <article
-                v-for="section in orderedSummaryCards"
-                :key="section.key"
-                class="metric-card metric-card--soft summary-card"
-                :class="[
-                  section.accentClass,
-                  section.featured ? 'xl:col-span-6' : 'xl:col-span-3',
-                ]"
-              >
-                <div class="flex flex-wrap items-center justify-between gap-3">
-                  <div class="space-y-1">
-                    <p class="metric-label">{{ section.title }}</p>
-                    <span class="analysis-badge">{{ section.badge }}</span>
-                  </div>
-                  <span class="analysis-badge analysis-badge--accent">{{ section.stanceTagLabel }}</span>
-                </div>
-
-                <div class="mt-3 space-y-3">
-                  <div class="summary-lead" :class="section.highlightLead ? 'summary-lead--featured' : ''">
-                    <div class="mb-2 flex items-center justify-between gap-3">
-                      <span class="font-mono text-[10px] tracking-[0.18em] text-slate-300/55">主判断</span>
-                      <span v-if="section.hasImportantLine" class="analysis-badge analysis-badge--accent">重点</span>
-                    </div>
-                    <p>{{ section.leadLine.text }}</p>
-                  </div>
-                  <div v-if="section.detailLines.length > 0" class="space-y-2">
-                    <div
-                      v-for="(line, lineIndex) in section.detailLines"
-                      :key="`${section.key}-${lineIndex}-${line.text}`"
-                      class="summary-detail"
-                      :class="line.important ? 'summary-detail--highlight' : ''"
-                    >
-                      <div class="mb-2 flex items-center justify-between gap-3">
-                        <span class="analysis-badge" :class="line.tagClass">{{ line.tag }}</span>
-                        <span v-if="line.important" class="analysis-badge analysis-badge--accent">重点</span>
-                      </div>
-                      <p>{{ line.text }}</p>
-                    </div>
-                  </div>
-                  <div v-if="section.newsHighlights.length > 0" class="space-y-2">
-                    <div class="summary-evidence-title">代表性标题</div>
-                    <div
-                      v-for="item in section.newsHighlights"
-                      :key="`${section.key}-headline-${item.index}-${item.text}`"
-                      class="summary-evidence summary-evidence--headline"
-                    >
-                      <div class="summary-evidence-index">{{ String(item.index).padStart(2, "0") }}</div>
-                      <div class="summary-evidence-text">
-                        <div class="font-mono text-[10px] tracking-[0.18em] text-slate-300/55">{{ item.source }}</div>
-                        <div class="mt-1 text-sm leading-6 text-slate-100/90">{{ item.text }}</div>
-                      </div>
-                    </div>
-                  </div>
-                  <div v-else-if="section.evidenceItems.length > 0" class="space-y-2">
-                    <div class="summary-evidence-title">参考依据</div>
-                    <div
-                      v-for="item in section.evidenceItems"
-                      :key="`${section.key}-evidence-${item.index}-${item.text}`"
-                      class="summary-evidence"
-                    >
-                      <div class="summary-evidence-index">{{ String(item.index).padStart(2, "0") }}</div>
-                      <div class="summary-evidence-text">
-                        {{ item.text }}
-                      </div>
-                    </div>
-                  </div>
-                  <div class="summary-stance-row summary-stance-row--footer">
-                    <span class="summary-stance-label">综合评价</span>
-                    <span class="summary-stance summary-stance--featured" :class="section.stanceClass">
-                      {{ section.stanceTagLabel }}
-                    </span>
-                  </div>
-                </div>
-              </article>
-            </div>
-          </article>
-
-          <aside class="dashboard-panel risk-panel rounded-[28px] p-5 sm:p-6">
-            <div class="flex flex-wrap items-center justify-between gap-3">
-              <p class="panel-title risk-panel__title">风险提示</p>
-              <span class="font-mono text-[11px] tracking-[0.18em] text-amber-200/70">重点关注</span>
-            </div>
-
-            <div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
-              <div class="metric-card metric-card--soft metric-card--risk-meta">
-                <p class="metric-label">风险生成时间</p>
-                <p class="metric-value mt-1 text-sm text-slate-100/90">{{ formatDateTime(forecast.reference_time) }}</p>
-              </div>
-              <div class="metric-card metric-card--soft metric-card--risk-meta">
-                <p class="metric-label">数据参考时间</p>
-                <p class="metric-value mt-1 text-sm text-slate-100/90">{{ formatDateTime(forecast.data_timestamp) }}</p>
-              </div>
-            </div>
-
-            <ul class="mt-4 space-y-3">
-              <li
-                v-for="(note, index) in riskNoteItems"
-                :key="`${index}-${note.text}`"
-                class="risk-note-card"
-                :class="note.toneClass"
-              >
-                <div class="flex items-center justify-between gap-3">
-                  <div class="flex items-center gap-2">
-                    <span class="risk-note-index">{{ String(index + 1).padStart(2, "0") }}</span>
-                    <p class="risk-note-title">风险条目</p>
-                  </div>
-                  <span class="risk-note-tag">{{ note.tag }}</span>
-                </div>
-                <p class="risk-note-body mt-2 whitespace-pre-line">
-                  {{ note.text }}
-                </p>
-                <div class="mt-3 flex items-center justify-between gap-3 text-[11px] tracking-[0.14em] text-slate-300/50">
-                  <span>生成时间</span>
-                  <span>{{ note.generatedAtLabel }}</span>
-                </div>
-              </li>
-              <li v-if="riskNoteItems.length === 0" class="metric-card metric-card--empty text-sm text-slate-200/60">
-                当前结果未返回额外的风险提示。
-              </li>
-            </ul>
-          </aside>
         </section>
 
         <section class="dashboard-panel rounded-[28px] p-5 sm:p-6">
@@ -567,6 +305,243 @@
               </tbody>
             </table>
           </div>
+        </section>
+
+        <section class="dashboard-panel rounded-[28px] px-5 py-6 sm:px-6 lg:px-8">
+          <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div class="space-y-2">
+              <p class="panel-title">时间窗判断</p>
+              <h2 class="section-heading">时间窗展望</h2>
+              <p class="section-copy max-w-3xl">
+                每个时间窗单独展示方向与补充判断，便于快速扫读。
+              </p>
+            </div>
+            <span class="font-mono text-[11px] tracking-[0.18em] text-slate-500">区间判断</span>
+          </div>
+
+          <div v-if="windowDirectionCards.length > 0" class="mt-4 grid gap-4 lg:grid-cols-2">
+            <article
+              v-for="window in windowDirectionCards"
+              :key="window.label"
+              class="summary-card summary-card--flat rounded-[28px] border border-slate-200 bg-white px-4 py-4 sm:px-5"
+            >
+              <div class="window-card-header">
+                <p class="window-card-title">{{ window.label }}</p>
+                <div class="window-card-chips">
+                  <span class="status-pill" :class="window.directionClass">{{ window.directionLabel }}</span>
+                  <span class="analysis-badge analysis-badge--slate">{{ window.strength }}</span>
+                  <span class="analysis-badge analysis-badge--cyan">置信度 {{ window.confidence }}</span>
+                  <span v-if="window.focusTag" class="analysis-badge analysis-badge--gold">{{ window.focusTag }}</span>
+                </div>
+              </div>
+
+              <div class="window-card-body">
+                <div class="window-card-main">
+                  <span class="summary-stance-label">主判断</span>
+                  <p class="window-card-copy">{{ window.primaryReason }}</p>
+                </div>
+
+                <div v-if="window.secondaryReasons.length > 0" class="window-card-secondary">
+                  <div class="flex items-center justify-between gap-3">
+                    <span class="summary-stance-label">补充判断</span>
+                    <span class="font-mono text-[10px] tracking-[0.18em] text-slate-500">agent 补充</span>
+                  </div>
+                  <div class="space-y-2">
+                    <div
+                      v-for="item in window.secondaryReasons"
+                      :key="`${window.label}-${item.tag}-${item.text}`"
+                      class="summary-flat-row summary-flat-row--evidence"
+                      :class="[
+                        item.important ? 'summary-flat-row--highlight' : '',
+                        item.important ? 'window-insight--important' : '',
+                      ]"
+                    >
+                      <span class="analysis-badge" :class="item.tagClass">{{ item.tag }}</span>
+                      <p class="summary-flat-row__text">{{ item.text }}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.85fr)]">
+          <article class="dashboard-panel market-candle-shell rounded-[28px] p-5 sm:p-6">
+            <MarketCandlestickChart
+              :bars="marketBars"
+              :current-price="forecast?.current_price ?? null"
+              title="K线图"
+              subtitle="黄金日线结构"
+              description="TradingView 行情每 15 分钟抓取一次，展示最近日线结构、收盘节奏、波动区间与价格参考线。"
+            />
+          </article>
+
+          <aside class="space-y-4">
+            <article class="dashboard-panel rounded-[28px] p-5 sm:p-6">
+              <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+                <div class="space-y-2">
+                  <p class="panel-title">实时元数据</p>
+                  <h2 class="section-heading">研究元数据</h2>
+                </div>
+                <span class="analysis-badge analysis-badge--accent">元数据</span>
+              </div>
+
+              <div class="mt-4 space-y-3">
+                <div v-for="metric in supportCards" :key="metric.label" class="summary-flat-row">
+                  <span class="analysis-badge analysis-badge--slate">{{ metric.label }}</span>
+                  <p class="summary-flat-row__text">{{ metric.value }}</p>
+                </div>
+              </div>
+            </article>
+          </aside>
+        </section>
+
+        <section class="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(380px,0.8fr)]">
+          <article class="dashboard-panel rounded-[28px] p-5 sm:p-6">
+            <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+              <div class="space-y-2">
+                <p class="panel-title">研究摘要</p>
+                <h2 class="section-heading">本轮 XAUUSD 研究结论</h2>
+                <p class="text-xs tracking-[0.16em] text-slate-600">
+                  结论时间：{{ formatDateTime(forecast.reference_time) }}
+                </p>
+              </div>
+              <span class="font-mono text-[11px] tracking-[0.18em] text-slate-500">结构化摘要</span>
+            </div>
+
+            <div class="mt-4 space-y-4">
+              <article
+                v-for="section in orderedSummaryCards"
+                :key="section.key"
+                class="summary-card summary-card--flat rounded-[28px] border border-slate-200 bg-white px-4 py-4 sm:px-5"
+                :class="[section.accentClass]"
+              >
+                <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+                  <p class="metric-label">{{ section.title }}</p>
+                  <div class="summary-stance-row summary-stance-row--compact">
+                    <span class="summary-stance-label">综合评价</span>
+                    <span class="summary-stance summary-stance--featured" :class="section.stanceClass">
+                      {{ section.stanceTagLabel }}
+                    </span>
+                  </div>
+                </div>
+
+                <div class="mt-4 divide-y divide-slate-200">
+                  <div class="py-3">
+                    <div class="summary-stance-row">
+                      <span class="summary-stance-label">主判断</span>
+                      <span v-if="section.hasImportantLine" class="analysis-badge analysis-badge--accent">重点</span>
+                    </div>
+                    <p class="mt-2 text-sm leading-7 text-slate-700">{{ section.leadLine.text }}</p>
+                  </div>
+
+                  <div
+                    v-if="section.key !== 'market_sentiment_summary' && section.detailLines.length > 0"
+                    class="py-3 space-y-2"
+                  >
+                    <div
+                      v-for="(line, lineIndex) in section.detailLines"
+                      :key="`${section.key}-${lineIndex}-${line.text}`"
+                      class="summary-flat-row"
+                      :class="line.important ? 'summary-flat-row--highlight' : ''"
+                    >
+                      <span class="analysis-badge" :class="line.tagClass">{{ line.tag }}</span>
+                      <p class="summary-flat-row__text">{{ line.text }}</p>
+                    </div>
+                  </div>
+
+                  <div v-if="section.key === 'market_sentiment_summary' && section.referenceItems.length > 0" class="py-3 space-y-2">
+                    <div class="summary-evidence-title">参考依据</div>
+                    <div
+                      v-for="item in section.referenceItems"
+                      :key="`${section.key}-reference-${item.index}-${item.text}`"
+                      class="summary-flat-row summary-flat-row--evidence"
+                    >
+                      <div class="summary-evidence-index">{{ String(item.index).padStart(2, "0") }}</div>
+                      <div class="summary-flat-row__body">
+                        <div class="summary-flat-row__text">{{ item.text }}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div v-else-if="section.newsHighlights.length > 0" class="py-3 space-y-2">
+                    <div class="summary-evidence-title">代表性标题</div>
+                    <div
+                      v-for="item in section.newsHighlights"
+                      :key="`${section.key}-headline-${item.index}-${item.text}`"
+                      class="summary-flat-row summary-flat-row--evidence"
+                    >
+                      <div class="summary-evidence-index">{{ String(item.index).padStart(2, "0") }}</div>
+                      <div class="summary-flat-row__body">
+                        <div class="font-mono text-[10px] tracking-[0.18em] text-slate-500">{{ item.source }}</div>
+                        <div class="mt-1 text-sm leading-6 text-slate-700">{{ item.text }}</div>
+                      </div>
+                    </div>
+                  </div>
+                  <div v-else-if="section.evidenceItems.length > 0" class="py-3 space-y-2">
+                    <div class="summary-evidence-title">参考依据</div>
+                    <div
+                      v-for="item in section.evidenceItems"
+                      :key="`${section.key}-evidence-${item.index}-${item.text}`"
+                      class="summary-flat-row summary-flat-row--evidence"
+                    >
+                      <div class="summary-evidence-index">{{ String(item.index).padStart(2, "0") }}</div>
+                      <div class="summary-flat-row__body">
+                        <div class="summary-flat-row__text">{{ item.text }}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                </div>
+              </article>
+            </div>
+          </article>
+
+          <aside class="dashboard-panel risk-panel rounded-[28px] p-5 sm:p-6">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <p class="panel-title risk-panel__title">风险提示</p>
+              <span class="font-mono text-[11px] tracking-[0.18em] text-amber-200/70">重点关注</span>
+            </div>
+
+            <div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+              <div class="metric-card metric-card--soft metric-card--risk-meta">
+                <p class="metric-label">风险生成时间</p>
+                <p class="metric-value mt-1 text-sm text-slate-100/90">{{ formatDateTime(forecast.reference_time) }}</p>
+              </div>
+              <div class="metric-card metric-card--soft metric-card--risk-meta">
+                <p class="metric-label">数据参考时间</p>
+                <p class="metric-value mt-1 text-sm text-slate-100/90">{{ formatDateTime(forecast.data_timestamp) }}</p>
+              </div>
+            </div>
+
+            <ul class="mt-4 space-y-3">
+              <li
+                v-for="(note, index) in riskNoteItems"
+                :key="`${index}-${note.text}`"
+                class="risk-note-card"
+                :class="note.toneClass"
+              >
+                <div class="flex items-center justify-between gap-3">
+                  <div class="flex items-center gap-2">
+                    <span class="risk-note-index">{{ String(index + 1).padStart(2, "0") }}</span>
+                    <p class="risk-note-title">风险条目</p>
+                  </div>
+                  <span class="risk-note-tag">{{ note.tag }}</span>
+                </div>
+                <p class="risk-note-body mt-2 whitespace-pre-line">
+                  {{ note.text }}
+                </p>
+                <div class="mt-3 flex items-center justify-between gap-3 text-[11px] tracking-[0.14em] text-slate-300/50">
+                  <span>生成时间</span>
+                  <span>{{ note.generatedAtLabel }}</span>
+                </div>
+              </li>
+              <li v-if="riskNoteItems.length === 0" class="metric-card metric-card--empty text-sm text-slate-200/60">
+                当前结果未返回额外的风险提示。
+              </li>
+            </ul>
+          </aside>
         </section>
 
         <section class="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(340px,0.78fr)]">
@@ -849,11 +824,9 @@ import {
   DIRECTION_STYLES,
   HISTORY_RESULT_LABELS,
   EMPTY_FORECAST_MESSAGE,
-  EMPTY_MARKET_BARS_MESSAGE,
   ERROR_FORECAST_MESSAGE,
   ERROR_MARKET_BARS_MESSAGE,
   LOADING_FORECAST_MESSAGE,
-  LOADING_MARKET_BARS_MESSAGE,
   SUMMARY_SECTIONS,
   SCHEDULER_STAGE_LABELS,
   SCHEDULER_STATUS_LABELS,
@@ -986,6 +959,7 @@ const schedulerAgentChips = computed(() => {
     label: agentLabel(agentStatus.agent),
     value: schedulerAgentStatusLabel(agentStatus.status),
     className: schedulerAgentStatusClass(agentStatus.status),
+    dotClass: schedulerAgentDotClass(agentStatus.status),
   }));
 });
 
@@ -1073,20 +1047,20 @@ const heroMetaCards = computed(() => {
   }
 
   const cards = [
-    forecast.value ? { label: "数据时间", value: formatDateTime(forecast.value.data_timestamp) } : null,
-    forecast.value ? { label: "数据来源", value: formatRuntimeSourceLabel(forecast.value.data_source) } : null,
-    schedulerStatus.value
-      ? {
-          label: "最新执行",
-          value: latestExecutionTime.value,
-        }
-      : null,
     schedulerStatus.value
       ? {
           label: "当前阶段",
           value: schedulerStageLabel.value,
         }
       : null,
+    forecast.value ? { label: "数据时间", value: formatDateTime(forecast.value.data_timestamp) } : null,
+    schedulerStatus.value
+      ? {
+          label: "最新执行",
+          value: latestExecutionTime.value,
+        }
+      : null,
+    forecast.value ? { label: "数据来源", value: formatRuntimeSourceLabel(forecast.value.data_source) } : null,
   ];
 
   return cards.filter((card): card is { label: string; value: string } => card !== null);
@@ -1098,10 +1072,17 @@ const supportCards = computed(() => {
   }
 
   return [
+    schedulerStatus.value
+      ? {
+          label: "当前阶段",
+          value: schedulerStageLabel.value,
+        }
+      : null,
     { label: "参考时间", value: formatDateTime(forecast.value.reference_time) },
     { label: "运行编号", value: forecast.value.run_id ?? "暂无" },
     { label: "预测编号", value: forecast.value.id ?? "暂无" },
-  ];
+    forecast.value ? { label: "数据来源", value: formatRuntimeSourceLabel(forecast.value.data_source) } : null,
+  ].filter((card): card is { label: string; value: string } => card !== null);
 });
 
 const tradeLevelCards = computed(() => {
@@ -1156,17 +1137,32 @@ const summaryCards = computed(() => {
   return SUMMARY_SECTIONS.map((section) => {
     const content = forecast.value?.[section.key] ?? null;
     const renderedContent = content && String(content).trim() ? String(content) : "当前维度暂无摘要。";
-    const rawLines = splitSummaryLines(renderedContent);
+      const rawLines = splitSummaryLines(renderedContent);
     const newsMarkerIndex = section.key === "news_summary" ? rawLines.findIndex((line) => line.includes("代表性标题")) : -1;
     const lines = rawLines.map((line) => parseInsightLine(line));
     const newsHighlights = section.key === "news_summary" ? parseNewsHighlights(renderedContent) : [];
     const evidenceLines = section.key === "news_summary" ? [] : splitEvidenceLines(renderedContent).slice(1);
     const hasImportantLine = lines.some((line) => line.important);
-    return {
-      key: section.key,
-      title: section.title,
-      content: renderedContent,
-      leadLine: lines[0] ?? parseInsightLine("当前维度暂无摘要。"),
+    const marketSentimentReferenceItems =
+      section.key === "market_sentiment_summary"
+        ? parseMarketSentimentReferences(renderedContent)
+        : [];
+      return {
+        key: section.key,
+        title: section.title,
+        content: renderedContent,
+      leadLine:
+        section.key === "market_sentiment_summary"
+          ? {
+              tag: "主判断",
+              text:
+                splitSummaryLines(renderedContent)
+                  .map((line) => line.replace(/^\-\s*/, "").trim())
+                  .find((line) => line.length > 0 && !/^(?:代表性市场|参考依据|主判断)[:：]\s*$/u.test(line)) ?? "当前维度暂无摘要。",
+              tagClass: "analysis-badge--slate",
+              important: false,
+            }
+          : lines[0] ?? parseInsightLine("当前维度暂无摘要。"),
       detailLines: section.key === "news_summary" && newsMarkerIndex > 0 ? lines.slice(1, newsMarkerIndex) : lines.slice(1),
       highlightLead: (lines[0] ?? parseInsightLine("当前维度暂无摘要。")).important,
       hasImportantLine,
@@ -1174,11 +1170,11 @@ const summaryCards = computed(() => {
         index: index + 1,
         text,
       })),
+      referenceItems: marketSentimentReferenceItems,
       newsHighlights,
       stanceLabel: summaryStanceLabel(section.key, renderedContent),
       stanceTagLabel: summaryStanceTagLabel(section.key, renderedContent),
       stanceClass: summaryStanceClass(section.key, renderedContent),
-      badge: summaryBadge(section.key),
       accentClass: summaryAccentClass(section.key),
       featured: section.key === "technical_summary" || section.key === "risk_summary",
     };
@@ -1316,8 +1312,6 @@ const riskRewardRatio = computed(() => {
 
   return `${(reward / risk).toFixed(2)} R`;
 });
-
-const latestMarketBar = computed(() => marketBars.value[marketBars.value.length - 1] ?? null);
 
 const riskNoteItems = computed(() => {
   if (!forecast.value) {
@@ -1533,6 +1527,19 @@ function schedulerAgentStatusClass(status: string): string {
   }
 }
 
+function schedulerAgentDotClass(status: string): string {
+  switch (status) {
+    case "running":
+      return "agent-state-chip__dot--warning";
+    case "success":
+      return "agent-state-chip__dot--success";
+    case "failed":
+      return "agent-state-chip__dot--danger";
+    default:
+      return "agent-state-chip__dot--warning";
+  }
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
@@ -1599,6 +1606,25 @@ function parseNewsHighlights(value: string): Array<{ index: number; source: stri
         text: (match?.groups?.text ?? line).trim(),
       };
     });
+}
+
+function parseMarketSentimentReferences(value: string): Array<{ index: number; text: string }> {
+  const lines = splitSummaryLines(value).map((line) => line.replace(/^\-\s*/, "").trim()).filter(Boolean);
+  const markerIndex = lines.findIndex((line) => /^参考依据[:：]$/u.test(line));
+  if (markerIndex < 0) {
+    return lines.slice(1).map((text, index) => ({
+      index: index + 1,
+      text,
+    }));
+  }
+
+  return lines
+    .slice(markerIndex + 1)
+    .filter((line) => line.length > 0)
+    .map((text, index) => ({
+      index: index + 1,
+      text,
+    }));
 }
 
 function buildInsightDisplay(value: string): {
@@ -1675,19 +1701,6 @@ function getMarketSessionLabel(now: Date = new Date()): string {
   return "日本市";
 }
 
-function summaryBadge(key: string): string {
-  const badgeMap: Record<string, string> = {
-    technical_summary: "技术",
-    macro_summary: "宏观",
-    news_summary: "新闻",
-    market_sentiment_summary: "情绪",
-    alt_data_summary: "另类",
-    risk_summary: "风险",
-  };
-
-  return badgeMap[key] ?? "重点";
-}
-
 function summaryAccentClass(key: string): string {
   const accentMap: Record<string, string> = {
     technical_summary: "summary-card--teal",
@@ -1704,7 +1717,7 @@ function summaryAccentClass(key: string): string {
 function summaryStanceLabel(key: string, content: string): string {
   const lowerContent = content.toLowerCase();
   if (key === "risk_summary") {
-    return "中性 / 防守";
+    return "中性 / 观望";
   }
   if (lowerContent.includes("看空") || lowerContent.includes("bearish") || content.includes("偏空") || content.includes("压力")) {
     return "看空";

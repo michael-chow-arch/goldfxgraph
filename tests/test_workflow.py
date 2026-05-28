@@ -565,7 +565,8 @@ def test_sentiment_and_alt_data_nodes_fallback_to_structured_summaries_without_o
     state = agent_market_sentiment_analysis(state)
     state = agent_alt_data_analysis(state)
 
-    assert state.get("market_sentiment_summary", "").startswith("市场情绪按")
+    assert state.get("market_sentiment_summary", "").startswith("主判断：市场情绪按")
+    assert "参考依据：" in state.get("market_sentiment_summary", "")
     assert "披萨指数" in state.get("alt_data_summary", "")
     assert state.get("market_sentiment_votes")
     assert state.get("alt_data_votes")
@@ -792,6 +793,7 @@ def test_newsflow_node_uses_mainstream_media_rss_when_available() -> None:
     assert "新闻流已从" in state.get("news_summary", "")
     assert "美联储" in state.get("news_summary", "")
     assert "黄金" in state.get("news_summary", "")
+    assert "路透社" in state.get("news_summary", "")
     assert "Gold edges higher" not in state.get("news_summary", "")
 
 
@@ -890,7 +892,7 @@ def test_market_sentiment_agent_ignores_blank_remote_summary(monkeypatch: pytest
     state = tool_fetch_market_sentiment_inputs(state)
     state = agent_market_sentiment_analysis(state)
 
-    assert state.get("market_sentiment_summary", "").startswith("市场情绪按")
+    assert state.get("market_sentiment_summary", "").startswith("主判断：市场情绪按")
     assert state["market_sentiment_summary"].strip() != ""
 
 
