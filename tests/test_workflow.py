@@ -11,18 +11,50 @@ from goldfxgraph.market_data.current_quote import QuoteProviderError
 from goldfxgraph.packages.common.settings import GoldFXGraphSettings
 from goldfxgraph.persistence.database import create_session_factory, init_models
 from goldfxgraph.persistence.repositories import ForecastRepository
-from goldfxgraph.schemas.forecast import AgentVote, CurrentQuote, DailyBar, ForecastDirection
-from goldfxgraph.workflow.graph import REQUIRED_NODE_NAMES, build_forecast_graph
+from goldfxgraph.persistence.seed_prompt_templates import seed_default_committee_prompt_templates
+from goldfxgraph.schemas.forecast import (
+    Actionability,
+    AgentVote,
+    CommitteeDecision,
+    CurrentQuote,
+    DailyBar,
+    DebateCase,
+    DebateRebuttal,
+    DebateSide,
+    DebateStance,
+    DecisionValidationResult,
+    EvidencePackage,
+    EvidencePackageItem,
+    EvidenceToolStatus,
+    FinalBias,
+    FinalDebatePosition,
+    ForecastDirection,
+    LongPlan,
+    RangePlan,
+    ShortPlan,
+)
+from goldfxgraph.workflow.graph import REQUIRED_NODE_NAMES, _route_committee_validation, build_forecast_graph
 from goldfxgraph.workflow.nodes import (
     MarketDataFreshnessError,
     WorkflowState,
     agent_alt_data_analysis,
+    agent_bear_final_position,
+    agent_bear_opening_case,
+    agent_bear_rebuttal,
+    agent_bull_final_position,
+    agent_bull_opening_case,
+    agent_bull_rebuttal,
     agent_forecast_planning,
     agent_macro_analysis,
     agent_market_sentiment_analysis,
     agent_news_analysis,
+    agent_repair_committee_decision,
     agent_technical_analysis,
+    agent_trading_committee_chair,
     create_research_forecast_from_inputs,
+    node_build_evidence_package,
+    node_persist_forecast,
+    node_validate_committee_decision,
     tool_ensure_market_data_freshness,
     tool_fetch_alt_data_inputs,
     tool_fetch_current_gold_quote,
@@ -34,6 +66,12 @@ from goldfxgraph.workflow.nodes import (
     tool_persist_forecast,
     tool_persist_research_run,
 )
+
+
+def _merge_state(state: dict[str, object], delta: dict[str, object]) -> dict[str, object]:
+    merged = dict(state)
+    merged.update(delta)
+    return merged
 
 
 def _bars() -> list[DailyBar]:
@@ -54,6 +92,206 @@ def _quote() -> CurrentQuote:
         current_price=2040,
         data_source="TradingView",
         data_timestamp=datetime.now(UTC),
+    )
+
+
+def _committee_validation_state(
+    *,
+    final_bias: FinalBias = FinalBias.bullish,
+    actionability: Actionability = Actionability.trade_candidate,
+    confidence_score: float = 0.68,
+    evidence_tool_status: EvidenceToolStatus = EvidenceToolStatus.ok,
+    include_long_plan: bool = True,
+    include_short_plan: bool = False,
+    include_range_plan: bool = False,
+    wait_conditions: list[str] | None = None,
+    long_plan_risk_reward: float = 2.0,
+    short_plan_risk_reward: float = 2.0,
+    range_plan_risk_reward: float = 1.8,
+) -> WorkflowState:
+    evidence_package = EvidencePackage(
+        symbol="XAUUSD",
+        reference_time=datetime.now(UTC),
+        data_timestamp=datetime.now(UTC),
+        data_source="TradingView",
+        summary="证据包摘要",
+        items=[
+            EvidencePackageItem(
+                item_id="technical",
+                specialist_name="technical",
+                category="price_action",
+                signal="bullish",
+                confidence=0.7,
+                key_evidence=["技术面偏多"],
+                risk_factors=["波动可控"],
+                invalidation_conditions=["跌破关键支撑"],
+                important_levels=["2050-2060"],
+                data_freshness="latest_bar: fresh",
+                tool_status=evidence_tool_status,
+                degraded_reason="数据源降级" if evidence_tool_status != EvidenceToolStatus.ok else None,
+                evidence_refs=["technical_summary"],
+            )
+        ],
+        notes=["仅供研究"],
+    )
+    bull_opening_case = DebateCase(
+        side=DebateSide.bull,
+        thesis="看多开场",
+        evidence_item_refs=["technical"],
+        entry_zone="2050-2055",
+        stop_loss_or_invalidation="2040",
+        target_zone="2075-2080",
+        risk_reward=2.0,
+        weakness_acknowledged=["仍需承认回撤风险"],
+        supporting_arguments=["技术面偏多"],
+        confidence=0.66,
+    )
+    bear_opening_case = DebateCase(
+        side=DebateSide.bear,
+        thesis="看空开场",
+        evidence_item_refs=["technical"],
+        entry_zone="2055-2060",
+        stop_loss_or_invalidation="2068",
+        target_zone="2035-2040",
+        risk_reward=2.0,
+        weakness_acknowledged=["反方仍有趋势延续可能"],
+        supporting_arguments=["反向情景存在"],
+        confidence=0.58,
+    )
+    bull_rebuttal = DebateRebuttal(
+        side=DebateSide.bull,
+        responds_to_side=DebateSide.bear,
+        rebutted_points=["空方对阻力位的强调"],
+        accepted_points=["空方承认波动仍存在"],
+        plan_adjustments=["上移入场确认条件"],
+        confidence_trend="flat",
+        confidence_change=0.0,
+        evidence_item_refs=["technical"],
+    )
+    bear_rebuttal = DebateRebuttal(
+        side=DebateSide.bear,
+        responds_to_side=DebateSide.bull,
+        rebutted_points=["多方对趋势延续的强调"],
+        accepted_points=["多方承认失效条件清晰"],
+        plan_adjustments=["收紧止损确认"],
+        confidence_trend="flat",
+        confidence_change=0.0,
+        evidence_item_refs=["technical"],
+    )
+    bull_final_position = FinalDebatePosition(
+        side=DebateSide.bull,
+        stance=DebateStance.maintain,
+        confidence=0.69,
+        confidence_change=0.01,
+        adopted_arguments=["趋势仍有延续空间"],
+        rejected_arguments=["空方对短线阻力的放大"],
+        plan_adjustments=["等待回踩确认"],
+        abandon_conditions=["有效跌破 2040"],
+        evidence_item_refs=["technical"],
+    )
+    bear_final_position = FinalDebatePosition(
+        side=DebateSide.bear,
+        stance=DebateStance.soften,
+        confidence=0.55,
+        confidence_change=-0.01,
+        adopted_arguments=["上方阻力仍然存在"],
+        rejected_arguments=["追空性价比不足"],
+        plan_adjustments=["仅观察反弹质量"],
+        abandon_conditions=["放量突破 2068"],
+        evidence_item_refs=["technical"],
+    )
+
+    long_plan = (
+        LongPlan(
+            entry_zone="2050-2055",
+            stop_loss="2040",
+            invalidation_level="2038",
+            target_zone="2075-2080",
+            risk_reward=long_plan_risk_reward,
+            conditions_to_enter=["回踩后重新站稳 2050"],
+            conditions_to_abort=["跌破 2040"],
+            evidence_item_refs=["technical"],
+        )
+        if include_long_plan
+        else None
+    )
+    short_plan = (
+        ShortPlan(
+            entry_zone="2055-2060",
+            stop_loss="2068",
+            invalidation_level="2070",
+            target_zone="2035-2040",
+            risk_reward=short_plan_risk_reward,
+            conditions_to_enter=["反弹失败后承压"],
+            conditions_to_abort=["突破 2068"],
+            evidence_item_refs=["technical"],
+        )
+        if include_short_plan
+        else None
+    )
+    range_plan = (
+        RangePlan(
+            upper_sell_zone="2060-2068",
+            lower_buy_zone="2042-2048",
+            upper_stop="2072",
+            lower_stop="2036",
+            midline_target="2052",
+            breakout_confirmation_level="2072",
+            breakdown_confirmation_level="2036",
+            range_invalidated_if="突破 2072 或跌破 2036",
+            risk_reward=range_plan_risk_reward,
+            conditions_to_enter=["区间边缘出现反转确认"],
+            conditions_to_abort=["突破或跌破区间"],
+            evidence_item_refs=["technical"],
+        )
+        if include_range_plan
+        else None
+    )
+
+    committee_decision = CommitteeDecision(
+        evidence_package=evidence_package,
+        bull_opening_case=bull_opening_case,
+        bear_opening_case=bear_opening_case,
+        bull_rebuttal=bull_rebuttal,
+        bear_rebuttal=bear_rebuttal,
+        bull_final_position=bull_final_position,
+        bear_final_position=bear_final_position,
+        final_bias=final_bias,
+        actionability=actionability,
+        winning_side=DebateSide.bull,
+        adopted_arguments=["趋势延续"],
+        rejected_arguments=["盲目追涨"],
+        long_plan=long_plan,
+        short_plan=short_plan,
+        range_plan=range_plan,
+        wait_conditions=
+        (
+            ["等待方向确认"]
+            if wait_conditions is None and final_bias == FinalBias.cautious
+            else (wait_conditions or [])
+        ),
+        confidence_score=confidence_score,
+        decision_summary="委员会决策摘要",
+        risk_notes=["仅供研究"],
+        evidence_item_refs=["technical"],
+    )
+
+    return WorkflowState(
+        latest_bar=_bars()[-1],
+        quote=_quote(),
+        indicators=compute_technical_indicators(_bars()),
+        evidence_package=evidence_package,
+        bull_opening_case=bull_opening_case,
+        bear_opening_case=bear_opening_case,
+        bull_rebuttal=bull_rebuttal,
+        bear_rebuttal=bear_rebuttal,
+        bull_final_position=bull_final_position,
+        bear_final_position=bear_final_position,
+        committee_decision=committee_decision,
+        validation_errors=[],
+        validation_warnings=[],
+        committee_validation_attempts=0,
+        committee_repair_attempts=0,
     )
 
 
@@ -93,7 +331,7 @@ async def test_tool_ensure_market_data_freshness_triggers_backfill_preflight(
 
     result = await tool_ensure_market_data_freshness(state)
 
-    assert result is state
+    assert result == {}
     assert len(calls) == 1
 
 
@@ -285,7 +523,7 @@ def test_agent_node_uses_configured_agent_api_without_leaking_key() -> None:
         },
     )
 
-    state = agent_macro_analysis(state)
+    state = _merge_state(state, agent_macro_analysis(state))
 
     assert len(requests) == 1
     request = requests[0]
@@ -350,16 +588,16 @@ def test_macro_node_uses_real_macro_inputs_when_available(monkeypatch: pytest.Mo
         ),
     )
 
-    state = tool_fetch_macro_inputs(state)
-    state = agent_macro_analysis(state)
+    state = _merge_state(state, tool_fetch_macro_inputs(state))
+    state = _merge_state(state, agent_macro_analysis(state))
 
     assert state.get("unavailable_signals", []) == []
-    assert "美元指数 104.32" in state.get("macro_summary", "")
-    assert "实际利率 2.45%" in state.get("macro_summary", "")
-    assert state.get("macro_summary", "").startswith("宏观面围绕美元指数与实际利率解读")
+    assert state.get("macro_summary", "").startswith("失败：macro agent")
+    assert state.get("macro_inputs", {}).get("dollar_index", {}).get("status") == "available"
+    assert state.get("macro_inputs", {}).get("real_rates", {}).get("status") == "available"
 
 
-def test_agent_node_uses_deterministic_fallback_without_agent_api() -> None:
+def test_agent_node_uses_failure_summary_without_agent_api() -> None:
     bars = _bars()
     called = False
 
@@ -376,18 +614,19 @@ def test_agent_node_uses_deterministic_fallback_without_agent_api() -> None:
         agent_http_transport=httpx.MockTransport(handler),
     )
 
-    state = agent_technical_analysis(state)
+    state = _merge_state(state, agent_technical_analysis(state))
 
     assert called is False
     agent_votes = state.get("agent_votes")
     technical_summary = state.get("technical_summary")
     assert technical_summary is not None
-    assert technical_summary.startswith("当前报价")
+    assert technical_summary.startswith("失败：technical agent")
     assert agent_votes is not None
     assert agent_votes[0].agent == "technical"
+    assert agent_votes[0].confidence == 0.0
 
 
-def test_agent_node_uses_deterministic_fallback_without_complete_openai_config() -> None:
+def test_agent_node_uses_failure_summary_without_complete_openai_config() -> None:
     bars = _bars()
     called = False
 
@@ -408,13 +647,14 @@ def test_agent_node_uses_deterministic_fallback_without_complete_openai_config()
         agent_http_transport=httpx.MockTransport(handler),
     )
 
-    state = agent_technical_analysis(state)
+    state = _merge_state(state, agent_technical_analysis(state))
 
     assert called is False
-    assert state.get("technical_summary", "").startswith("当前报价")
+    assert state.get("technical_summary", "").startswith("失败：technical agent")
     agent_votes = state.get("agent_votes")
     assert agent_votes is not None
-    assert agent_votes[0].direction == ForecastDirection.bullish
+    assert agent_votes[0].direction == ForecastDirection.neutral
+    assert agent_votes[0].confidence == 0.0
 
 
 def test_agent_node_reports_placeholder_secret_as_unconfigured() -> None:
@@ -438,10 +678,10 @@ def test_agent_node_reports_placeholder_secret_as_unconfigured() -> None:
         agent_http_transport=httpx.MockTransport(handler),
     )
 
-    state = agent_technical_analysis(state)
+    state = _merge_state(state, agent_technical_analysis(state))
 
     assert called is False
-    assert state.get("technical_summary", "").startswith("当前报价")
+    assert state.get("technical_summary", "").startswith("失败：technical agent")
     assert state.get("agent_diagnostics") is not None
     assert state["agent_diagnostics"][0]["agent"] == "technical"
     assert "未配置有效 base_url/model/API Key" in state["agent_diagnostics"][0]["message"]
@@ -472,7 +712,7 @@ def test_forecast_planning_aligns_direction_and_levels_with_agent_votes() -> Non
         risk_summary="风险中性",
     )
 
-    state = agent_forecast_planning(state)
+    state = _merge_state(state, agent_forecast_planning(state))
     forecast = state.get("forecast")
 
     assert forecast is not None
@@ -504,7 +744,7 @@ def test_forecast_planning_includes_recent_feedback_history() -> None:
         forecast_feedback_history=["最近一次看多后止损", "上一轮偏多但收益有限"],
     )
 
-    state = agent_forecast_planning(state)
+    state = _merge_state(state, agent_forecast_planning(state))
     forecast = state.get("forecast")
 
     assert forecast is not None
@@ -533,23 +773,24 @@ def test_agent_node_falls_back_deterministically_when_openai_response_is_invalid
     )
 
     caplog.set_level("WARNING")
-    state = agent_technical_analysis(state)
+    state = _merge_state(state, agent_technical_analysis(state))
 
-    assert state.get("technical_summary", "").startswith("当前报价")
+    assert state.get("technical_summary", "").startswith("失败：technical agent")
     agent_votes = state.get("agent_votes")
     assert agent_votes is not None
     assert agent_votes[0].agent == "technical"
-    assert agent_votes[0].direction == ForecastDirection.bullish
+    assert agent_votes[0].direction == ForecastDirection.neutral
+    assert agent_votes[0].confidence == 0.0
     assert state.get("agent_diagnostics") is not None
     assert state["agent_diagnostics"][0]["agent"] == "technical"
     assert state["agent_diagnostics"][0]["message"] == (
-        "OpenAI-compatible technical agent 调用失败，已回退到 deterministic workflow 输出。"
+        "OpenAI-compatible technical agent 调用失败，已标记为失败，不生成兜底输出。"
     )
     assert "OpenAI-compatible response returned invalid JSON for technical" in caplog.text
     assert state["agent_diagnostics"][0]["detail"] == "OpenAI-compatible response returned invalid JSON for technical"
 
 
-def test_sentiment_and_alt_data_nodes_fallback_to_structured_summaries_without_openai() -> None:
+def test_sentiment_and_alt_data_nodes_fail_without_openai() -> None:
     bars = _bars()
     quote = _quote()
     state = WorkflowState(
@@ -560,14 +801,13 @@ def test_sentiment_and_alt_data_nodes_fallback_to_structured_summaries_without_o
         forecast_feedback_history=["上一轮看多后回撤偏大"],
     )
 
-    state = tool_fetch_market_sentiment_inputs(state)
-    state = tool_fetch_alt_data_inputs(state)
-    state = agent_market_sentiment_analysis(state)
-    state = agent_alt_data_analysis(state)
+    state = _merge_state(state, tool_fetch_market_sentiment_inputs(state))
+    state = _merge_state(state, tool_fetch_alt_data_inputs(state))
+    state = _merge_state(state, agent_market_sentiment_analysis(state))
+    state = _merge_state(state, agent_alt_data_analysis(state))
 
-    assert state.get("market_sentiment_summary", "").startswith("主判断：市场情绪按")
-    assert "参考依据：" in state.get("market_sentiment_summary", "")
-    assert "披萨指数" in state.get("alt_data_summary", "")
+    assert state.get("market_sentiment_summary", "").startswith("失败：market_sentiment agent")
+    assert state.get("alt_data_summary", "").startswith("失败：alt_data agent")
     assert state.get("market_sentiment_votes")
     assert state.get("alt_data_votes")
     assert any(vote.agent == "market_sentiment" for vote in state.get("agent_votes", []))
@@ -615,10 +855,10 @@ def test_sentiment_and_alt_data_nodes_use_external_signals_when_available() -> N
         signal_http_transport=httpx.MockTransport(handler),
     )
 
-    state = tool_fetch_market_sentiment_inputs(state)
-    state = tool_fetch_alt_data_inputs(state)
-    state = agent_market_sentiment_analysis(state)
-    state = agent_alt_data_analysis(state)
+    state = _merge_state(state, tool_fetch_market_sentiment_inputs(state))
+    state = _merge_state(state, tool_fetch_alt_data_inputs(state))
+    state = _merge_state(state, agent_market_sentiment_analysis(state))
+    state = _merge_state(state, agent_alt_data_analysis(state))
 
     unavailable = state.get("unavailable_signals", [])
     assert "cftc_commitments" not in unavailable
@@ -627,9 +867,8 @@ def test_sentiment_and_alt_data_nodes_use_external_signals_when_available() -> N
     assert state["market_sentiment_inputs"]["cftc_commitments"]["positioning_bias"] == "bullish"
     assert state["alt_data_inputs"]["dollar_index"]["status"] == "available"
     assert state["alt_data_inputs"]["real_rates"]["status"] == "available"
-    assert "美元指数" in state["alt_data_summary"]
-    assert "实际利率" in state["alt_data_summary"]
-    assert "CFTC" in state["market_sentiment_summary"] or "净多头" in state["market_sentiment_summary"]
+    assert state["alt_data_summary"].startswith("失败：alt_data agent")
+    assert state["market_sentiment_summary"].startswith("失败：market_sentiment agent")
 
 
 def test_polymarket_inputs_feed_market_sentiment_summary() -> None:
@@ -710,17 +949,16 @@ def test_polymarket_inputs_feed_market_sentiment_summary() -> None:
         },
     )
 
-    state = tool_fetch_polymarket_inputs(state)
-    state = tool_fetch_market_sentiment_inputs(state)
-    state = agent_market_sentiment_analysis(state)
+    state = _merge_state(state, tool_fetch_polymarket_inputs(state))
+    state = _merge_state(state, tool_fetch_market_sentiment_inputs(state))
+    state = _merge_state(state, agent_market_sentiment_analysis(state))
 
     polymarket_inputs = state.get("polymarket_inputs")
     assert polymarket_inputs is not None
     assert polymarket_inputs["status"] == "available"
     assert polymarket_inputs["gold_related_market_count"] >= 2
     assert "polymarket" in state.get("market_sentiment_inputs", {}).get("available_signals", [])
-    assert "Polymarket" in state.get("market_sentiment_summary", "")
-    assert "黄金" in state.get("market_sentiment_summary", "")
+    assert state.get("market_sentiment_summary", "").startswith("失败：market_sentiment agent")
 
 
 def test_newsflow_node_uses_mainstream_media_rss_when_available() -> None:
@@ -782,19 +1020,15 @@ def test_newsflow_node_uses_mainstream_media_rss_when_available() -> None:
         signal_http_transport=httpx.MockTransport(handler),
     )
 
-    state = tool_fetch_newsflow_inputs(state)
-    state = agent_news_analysis(state)
+    state = _merge_state(state, tool_fetch_newsflow_inputs(state))
+    state = _merge_state(state, agent_news_analysis(state))
 
     newsflow_inputs = state.get("newsflow_inputs")
     assert newsflow_inputs is not None
     assert newsflow_inputs["status"] == "available"
     assert newsflow_inputs["headline_count"] >= 3
     assert "newsflow" not in state.get("unavailable_signals", [])
-    assert "新闻流已从" in state.get("news_summary", "")
-    assert "美联储" in state.get("news_summary", "")
-    assert "黄金" in state.get("news_summary", "")
-    assert "路透社" in state.get("news_summary", "")
-    assert "Gold edges higher" not in state.get("news_summary", "")
+    assert state.get("news_summary", "").startswith("失败：news agent")
 
 
 def test_pizza_index_node_uses_public_dashboard_snapshot_when_available() -> None:
@@ -848,9 +1082,9 @@ def test_pizza_index_node_uses_public_dashboard_snapshot_when_available() -> Non
         signal_http_transport=httpx.MockTransport(handler),
     )
 
-    state = tool_fetch_pizza_index_inputs(state)
-    state = tool_fetch_alt_data_inputs(state)
-    state = agent_alt_data_analysis(state)
+    state = _merge_state(state, tool_fetch_pizza_index_inputs(state))
+    state = _merge_state(state, tool_fetch_alt_data_inputs(state))
+    state = _merge_state(state, agent_alt_data_analysis(state))
 
     pizza_index_inputs = state.get("pizza_index_inputs")
     assert pizza_index_inputs is not None
@@ -860,8 +1094,7 @@ def test_pizza_index_node_uses_public_dashboard_snapshot_when_available() -> Non
     assert pizza_index_inputs["top_locations"][0]["name"] == "EXTREME PIZZA"
     assert pizza_index_inputs["top_locations"][0]["spike_pct"] == 270
     assert "pizza_index" not in state.get("unavailable_signals", [])
-    assert "五角大楼披萨指数" in state.get("alt_data_summary", "")
-    assert state.get("alt_data_summary", "").splitlines()[0] == "另类数据维度以保守处理为主。"
+    assert state.get("alt_data_summary", "").startswith("失败：alt_data agent")
 
 
 def test_market_sentiment_agent_ignores_blank_remote_summary(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -889,14 +1122,15 @@ def test_market_sentiment_agent_ignores_blank_remote_summary(monkeypatch: pytest
         ),
     )
 
-    state = tool_fetch_market_sentiment_inputs(state)
-    state = agent_market_sentiment_analysis(state)
+    state = _merge_state(state, tool_fetch_market_sentiment_inputs(state))
+    state = _merge_state(state, agent_market_sentiment_analysis(state))
 
-    assert state.get("market_sentiment_summary", "").startswith("主判断：市场情绪按")
-    assert state["market_sentiment_summary"].strip() != ""
+    assert state.get("market_sentiment_summary", "").startswith("失败：market_sentiment agent")
+    assert state["market_sentiment_votes"][0].confidence == 0.0
+    assert state["agent_diagnostics"][0]["status"] == "invalid_response"
 
 
-def test_forecast_planning_carries_remote_agent_fallback_diagnostics_into_risk_notes() -> None:
+def test_forecast_planning_carries_remote_agent_failure_diagnostics_into_risk_notes() -> None:
     bars = _bars()
     indicators = compute_technical_indicators(bars)
     quote = _quote()
@@ -916,7 +1150,7 @@ def test_forecast_planning_carries_remote_agent_fallback_diagnostics_into_risk_n
         ],
         risk_notes=[
             "已有风险提示",
-            "OpenAI-compatible technical agent 调用失败，已回退到 deterministic workflow 输出。",
+            "OpenAI-compatible technical agent 调用失败，已标记为失败，不生成兜底输出。",
         ],
     )
 
@@ -925,7 +1159,7 @@ def test_forecast_planning_carries_remote_agent_fallback_diagnostics_into_risk_n
 
     assert forecast is not None
     assert "已有风险提示" in forecast.risk_notes
-    assert "OpenAI-compatible technical agent 调用失败，已回退到 deterministic workflow 输出。" in forecast.risk_notes
+    assert "OpenAI-compatible technical agent 调用失败，已标记为失败，不生成兜底输出。" in forecast.risk_notes
 
 
 @pytest.mark.asyncio
@@ -941,8 +1175,8 @@ async def test_persistence_nodes_save_run_and_forecast() -> None:
     )
     state = WorkflowState(repository=repo, latest_bar=bars[-1], forecast=forecast)
 
-    state = await tool_persist_research_run(state)
-    state = await tool_persist_forecast(state)
+    state = _merge_state(state, await tool_persist_research_run(state))
+    state = _merge_state(state, await tool_persist_forecast(state))
     run_id = state.get("run_id")
     assert run_id is not None
     loaded = await repo.get_research_run(run_id)
@@ -952,3 +1186,319 @@ async def test_persistence_nodes_save_run_and_forecast() -> None:
     assert loaded.forecast is not None
     assert loaded.forecast.direction == forecast.direction
     await session_factory.engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_node_persist_forecast_falls_back_to_current_research_forecast() -> None:
+    session_factory = create_session_factory("sqlite+aiosqlite:///:memory:")
+    await init_models(session_factory.engine)
+    repo = ForecastRepository(session_factory)
+    bars = _bars()
+    state = WorkflowState(
+        repository=repo,
+        latest_bar=bars[-1],
+        quote=_quote(),
+        indicators=compute_technical_indicators(bars),
+    )
+
+    state = _merge_state(state, await node_persist_forecast(state))
+    run_id = state.get("run_id")
+    forecast = state.get("forecast")
+
+    assert run_id is not None
+    assert forecast is not None
+    assert state.get("persistence_status") == "forecast_saved"
+    loaded = await repo.get_research_run(run_id)
+    assert loaded is not None
+    assert loaded.forecast is not None
+    assert loaded.forecast.direction == forecast.direction
+    await session_factory.engine.dispose()
+
+
+def test_node_build_evidence_package_aggregates_specialist_outputs() -> None:
+    bars = _bars()
+    indicators = compute_technical_indicators(bars)
+    state = WorkflowState(
+        latest_bar=bars[-1],
+        quote=_quote(),
+        indicators=indicators,
+        technical_summary="技术分析摘要",
+        macro_summary="宏观分析摘要",
+        news_summary="新闻分析摘要",
+        market_sentiment_summary="市场情绪摘要",
+        alt_data_summary="另类数据摘要",
+        risk_summary="风险分析摘要",
+        risk_notes=["波动区间扩大", "RSI 处于中性区域"],
+        agent_votes=[
+            AgentVote(agent="technical", direction=ForecastDirection.bullish, confidence=0.72, rationale="技术看多"),
+            AgentVote(agent="macro", direction=ForecastDirection.neutral, confidence=0.34, rationale="宏观中性"),
+            AgentVote(agent="news", direction=ForecastDirection.neutral, confidence=0.31, rationale="新闻中性"),
+            AgentVote(
+                agent="market_sentiment",
+                direction=ForecastDirection.bearish,
+                confidence=0.41,
+                rationale="情绪偏空",
+            ),
+            AgentVote(agent="alt_data", direction=ForecastDirection.neutral, confidence=0.29, rationale="另类数据中性"),
+            AgentVote(agent="risk", direction=ForecastDirection.neutral, confidence=0.55, rationale="风险中性"),
+        ],
+        macro_inputs={
+            "dollar_index": {"status": "available", "value": 104.12, "summary": "美元指数偏强"},
+            "real_rates": {"status": "available", "value": 2.31, "summary": "实际利率温和"},
+            "available_signals": ["dollar_index", "real_rates"],
+            "unavailable_signals": [],
+        },
+        newsflow_inputs={
+            "status": "available",
+            "summary": "新闻流保持中性。",
+            "headline_count": 2,
+            "source_count": 1,
+            "sentiment": "neutral",
+            "top_headlines": [
+                {
+                    "title_cn": "黄金维持震荡",
+                    "source_cn": "Reuters",
+                }
+            ],
+        },
+        market_sentiment_inputs={
+            "feedback_history": ["上一轮多头延续失败"],
+            "feedback_signal_count": 1,
+            "cftc_commitments": {"status": "available", "summary": "CFTC 持仓平衡"},
+            "polymarket_summary": "市场预期偏中性。",
+            "polymarket_bullish_count": 1,
+            "polymarket_bearish_count": 1,
+            "available_signals": ["cftc_commitments", "polymarket"],
+            "unavailable_signals": [],
+        },
+        alt_data_inputs={
+            "pizza_index": {"status": "available", "summary": "Pizza Index 正常"},
+            "dollar_index": {"status": "available", "summary": "美元指数稳定"},
+            "real_rates": {"status": "available", "summary": "实际利率稳定"},
+            "price_context": {
+                "current_price": 2040.0,
+                "latest_close": 2038.0,
+            },
+            "available_signals": ["pizza_index", "dollar_index", "real_rates"],
+            "unavailable_signals": [],
+        },
+    )
+
+    result = node_build_evidence_package(state)
+    package = result.get("evidence_package")
+
+    assert package is not None
+    assert package.symbol == "XAUUSD"
+    assert len(package.items) == 6
+    assert {item.specialist_name for item in package.items} == {
+        "technical",
+        "macro",
+        "news",
+        "market_sentiment",
+        "alt_data",
+        "risk",
+    }
+    assert package.items[0].tool_status == "ok"
+    assert "仅汇总 specialist analyses" in (package.summary or "")
+
+
+@pytest.mark.asyncio
+async def test_committee_agent_chain_builds_prompts_and_final_forecast() -> None:
+    session_factory = create_session_factory("sqlite+aiosqlite:///:memory:")
+    await init_models(session_factory.engine)
+    await seed_default_committee_prompt_templates(session_factory)
+    repo = ForecastRepository(session_factory)
+    bars = _bars()
+    indicators = compute_technical_indicators(bars)
+    state = WorkflowState(
+        repository=repo,
+        latest_bar=bars[-1],
+        quote=_quote(),
+        indicators=indicators,
+        technical_summary="技术分析摘要",
+        macro_summary="宏观分析摘要",
+        news_summary="新闻分析摘要",
+        market_sentiment_summary="市场情绪摘要",
+        alt_data_summary="另类数据摘要",
+        risk_summary="风险分析摘要",
+        risk_notes=["波动区间扩大", "RSI 处于中性区域"],
+        agent_votes=[
+            AgentVote(agent="technical", direction=ForecastDirection.bullish, confidence=0.72, rationale="技术看多"),
+            AgentVote(agent="macro", direction=ForecastDirection.neutral, confidence=0.34, rationale="宏观中性"),
+            AgentVote(agent="news", direction=ForecastDirection.neutral, confidence=0.31, rationale="新闻中性"),
+            AgentVote(
+                agent="market_sentiment",
+                direction=ForecastDirection.bearish,
+                confidence=0.41,
+                rationale="情绪偏空",
+            ),
+            AgentVote(agent="alt_data", direction=ForecastDirection.neutral, confidence=0.29, rationale="另类数据中性"),
+            AgentVote(agent="risk", direction=ForecastDirection.neutral, confidence=0.55, rationale="风险中性"),
+        ],
+        macro_inputs={
+            "dollar_index": {"status": "available", "value": 104.12, "summary": "美元指数偏强"},
+            "real_rates": {"status": "available", "value": 2.31, "summary": "实际利率温和"},
+            "available_signals": ["dollar_index", "real_rates"],
+            "unavailable_signals": [],
+        },
+        newsflow_inputs={
+            "status": "available",
+            "summary": "新闻流保持中性。",
+            "headline_count": 2,
+            "source_count": 1,
+            "sentiment": "neutral",
+            "top_headlines": [
+                {
+                    "title_cn": "黄金维持震荡",
+                    "source_cn": "Reuters",
+                }
+            ],
+        },
+        market_sentiment_inputs={
+            "feedback_history": ["上一轮多头延续失败"],
+            "feedback_signal_count": 1,
+            "cftc_commitments": {"status": "available", "summary": "CFTC 持仓平衡"},
+            "polymarket_summary": "市场预期偏中性。",
+            "polymarket_bullish_count": 1,
+            "polymarket_bearish_count": 1,
+            "available_signals": ["cftc_commitments", "polymarket"],
+            "unavailable_signals": [],
+        },
+        alt_data_inputs={
+            "pizza_index": {"status": "available", "summary": "Pizza Index 正常"},
+            "dollar_index": {"status": "available", "summary": "美元指数稳定"},
+            "real_rates": {"status": "available", "summary": "实际利率稳定"},
+            "price_context": {
+                "current_price": 2040.0,
+                "latest_close": 2038.0,
+            },
+            "available_signals": ["pizza_index", "dollar_index", "real_rates"],
+            "unavailable_signals": [],
+        },
+    )
+
+    state = _merge_state(state, node_build_evidence_package(state))
+    state = _merge_state(state, await agent_bull_opening_case(state))
+    state = _merge_state(state, await agent_bear_opening_case(state))
+    state = _merge_state(state, await agent_bull_rebuttal(state))
+    state = _merge_state(state, await agent_bear_rebuttal(state))
+    state = _merge_state(state, await agent_bull_final_position(state))
+    state = _merge_state(state, await agent_bear_final_position(state))
+    state = _merge_state(state, await agent_trading_committee_chair(state))
+    state = _merge_state(state, await agent_repair_committee_decision(state))
+    state = _merge_state(state, await node_persist_forecast(state))
+
+    committee_decision = state.get("committee_decision")
+    final_forecast = state.get("final_forecast")
+    prompt_versions = state.get("prompt_versions") or []
+
+    assert committee_decision is not None
+    assert committee_decision.final_bias in {"bullish", "bearish", "range_bound", "cautious"}
+    assert committee_decision.actionability in {
+        "trade_candidate",
+        "prepare_only",
+        "observe_only",
+        "no_trade",
+    }
+    assert final_forecast is not None
+    assert final_forecast.final_bias == committee_decision.final_bias
+    assert len(prompt_versions) >= 14
+    assert state.get("persistence_status") == "forecast_saved"
+    await session_factory.engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("case_name", "state_kwargs", "expected_error"),
+    [
+        (
+            "bullish_requires_long_plan",
+            {"final_bias": FinalBias.bullish, "actionability": Actionability.prepare_only, "include_long_plan": False},
+            "bullish decisions require long_plan",
+        ),
+        (
+            "bearish_requires_short_plan",
+            {
+                "final_bias": FinalBias.bearish,
+                "actionability": Actionability.prepare_only,
+                "include_long_plan": False,
+                "include_short_plan": False,
+            },
+            "bearish decisions require short_plan",
+        ),
+        (
+            "range_bound_requires_range_plan",
+            {
+                "final_bias": FinalBias.range_bound,
+                "actionability": Actionability.observe_only,
+                "include_long_plan": False,
+                "include_range_plan": False,
+            },
+            "range_bound decisions require range_plan",
+        ),
+        (
+            "cautious_requires_wait_conditions",
+            {
+                "final_bias": FinalBias.cautious,
+                "actionability": Actionability.no_trade,
+                "include_long_plan": False,
+                "wait_conditions": [],
+            },
+            "cautious decisions require wait_conditions",
+        ),
+        (
+            "trade_candidate_needs_minimum_confidence",
+            {
+                "final_bias": FinalBias.bullish,
+                "actionability": Actionability.trade_candidate,
+                "confidence_score": 0.5,
+            },
+            "trade_candidate confidence should be at least 0.55",
+        ),
+        (
+            "degraded_sources_require_conservative_confidence",
+            {
+                "final_bias": FinalBias.bullish,
+                "actionability": Actionability.trade_candidate,
+                "confidence_score": 0.86,
+                "evidence_tool_status": EvidenceToolStatus.degraded,
+            },
+            "evidence package contains degraded sources, confidence should stay conservative",
+        ),
+    ],
+)
+def test_node_validate_committee_decision_enforces_core_rules(
+    case_name: str,
+    state_kwargs: dict[str, object],
+    expected_error: str,
+) -> None:
+    state = _committee_validation_state(**state_kwargs)
+
+    result = node_validate_committee_decision(state)
+    validation_status = result.get("validation_status")
+
+    assert isinstance(validation_status, DecisionValidationResult), case_name
+    assert validation_status.is_valid is False, case_name
+    assert expected_error in validation_status.errors, case_name
+    assert result.get("committee_validation_attempts") == 1, case_name
+    assert _route_committee_validation(result) == "repair", case_name
+
+
+def test_node_validate_committee_decision_accepts_valid_trade_candidate() -> None:
+    state = _committee_validation_state()
+
+    result = node_validate_committee_decision(state)
+    validation_status = result.get("validation_status")
+
+    assert isinstance(validation_status, DecisionValidationResult)
+    assert validation_status.is_valid is True
+    assert validation_status.errors == []
+    assert _route_committee_validation(result) == "persist"
+
+
+def test_committee_validation_routes_to_repair_until_attempt_limit() -> None:
+    state = _committee_validation_state(include_long_plan=False)
+    first_pass = node_validate_committee_decision(state)
+
+    assert _route_committee_validation(first_pass) == "repair"
+    assert _route_committee_validation({**first_pass, "committee_validation_attempts": 2}) == "repair"
+    assert _route_committee_validation({**first_pass, "committee_validation_attempts": 3}) == "persist"

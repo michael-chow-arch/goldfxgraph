@@ -12,6 +12,7 @@ from goldfxgraph.api.errors import (
 )
 from goldfxgraph.schemas.forecast import (
     DailyBar,
+    FinalForecast,
     ForecastHistoryItem,
     ForecastResult,
     ResearchRunResult,
@@ -21,8 +22,8 @@ from goldfxgraph.schemas.forecast import (
 router = APIRouter()
 
 
-@router.get("/forecast/latest", response_model=ForecastResult)
-async def get_latest_forecast(request: Request) -> ForecastResult:
+@router.get("/forecast/latest", response_model=FinalForecast | ForecastResult)
+async def get_latest_forecast(request: Request) -> FinalForecast | ForecastResult:
     repository = _repository(request)
     forecast = await repository.get_latest_forecast()
     if forecast is None:

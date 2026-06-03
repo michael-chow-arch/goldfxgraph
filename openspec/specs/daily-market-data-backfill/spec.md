@@ -1,4 +1,7 @@
-## MODIFIED Requirements
+## Purpose
+确保 GoldFXGraph 在每日可用前完成 completed daily bars 的补齐、校验与持久化，避免基于过期或缺失的日线数据继续生成 forecast。
+
+## Requirements
 
 ### Requirement: Daily backfill runs after the U.S. gold market close and before service startup
 系统 SHALL 在美国黄金市场收市后执行每日补数任务，并在服务启动前先补齐数据库中的 completed daily bars；系统必须使用 `America/New_York` 时区计算触发窗口，并确保补齐完成后才允许服务进入可用状态。

@@ -1,4 +1,7 @@
-## ADDED Requirements
+## Purpose
+定义 GoldFXGraph 的 LangGraph 预测工作流必须遵循的节点拓扑、前置校验与委员会式决策门控，确保预测生成过程可追踪、可验证且与当前实现保持一致。
+
+## Requirements
 
 ### Requirement: Workflow performs market data freshness preflight before forecast generation
 系统 SHALL 在生成 forecast 之前先校验 completed daily bars 是否已经追平最新完成交易日；若未追平，系统必须先执行补齐检查，补齐失败则拒绝继续生成预测。

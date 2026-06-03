@@ -7,17 +7,23 @@ from typing import Any, cast
 
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
+from sqlalchemy import func, select
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from goldfxgraph.api.app import create_app
 from goldfxgraph.packages.common.settings import GoldFXGraphSettings
+from goldfxgraph.persistence.models import PromptTemplateModel
 from goldfxgraph.persistence.repositories import ForecastRepository
 from goldfxgraph.schemas.forecast import (
+    Actionability,
     AgentVote,
     DailyBar,
+    FinalBias,
+    FinalForecast,
     ForecastDirection,
     ForecastResult,
     ForecastWindowDirection,
+    PromptVersionMetadata,
     ResearchRunResult,
     SchedulerRunStatus,
 )
@@ -211,6 +217,52 @@ def test_startup_registers_research_scheduler(monkeypatch: Any, tmp_path: Path) 
     assert scheduler_task.cancelled()
 
 
+def test_startup_seeds_committee_prompt_templates(monkeypatch: Any, tmp_path: Path) -> None:
+    from goldfxgraph.research.scheduler import ResearchSchedulerHandle
+
+    scheduler_task: asyncio.Task[None] | None = None
+
+    async def fake_health_check(**kwargs: Any) -> Any:
+        return type("HealthReport", (), {"status": "ok"})()
+
+    def fake_start_research_scheduler(**kwargs: Any) -> ResearchSchedulerHandle:
+        nonlocal scheduler_task
+        scheduler_task = asyncio.create_task(asyncio.sleep(3600))
+        return ResearchSchedulerHandle(
+            stop_event=asyncio.Event(),
+            task=scheduler_task,
+            scheduler=type("Scheduler", (), {"latest_status": None})(),
+        )
+
+    monkeypatch.setattr("goldfxgraph.api.app.run_agent_health_check", fake_health_check)
+    monkeypatch.setattr("goldfxgraph.api.app.start_research_scheduler", fake_start_research_scheduler)
+
+    db_path = tmp_path / "committee-prompts.sqlite3"
+    settings = GoldFXGraphSettings(
+        xauusd_csv_path=tmp_path / "unused.csv",
+        database_url=f"sqlite+aiosqlite:///{db_path}",
+    )
+
+    with TestClient(create_app(testing=False, settings=settings)) as client:
+        session_factory = client.app.state.session_factory
+        assert session_factory is not None
+
+        async def _count_prompt_templates() -> int:
+            async with session_factory.sessionmaker() as session:
+                result = await session.execute(
+                    select(func.count()).select_from(PromptTemplateModel).where(
+                        PromptTemplateModel.prompt_key == "trading_committee.chair.system"
+                    )
+                )
+                return int(result.scalar_one())
+
+        prompt_count = asyncio.run(_count_prompt_templates())
+
+    assert prompt_count == 1
+    assert scheduler_task is not None
+    assert scheduler_task.cancelled()
+
+
 def test_get_market_data_bars_endpoint_returns_recent_daily_bars() -> None:
     repository = InMemoryForecastRepository()
     _seed_market_data(repository)
@@ -348,6 +400,44 @@ def test_latest_forecast_returns_seeded_forecast_without_secret_leak() -> None:
     assert "agent-key" not in response.text
 
 
+def test_latest_forecast_exposes_committee_metadata_when_available() -> None:
+    repository = InMemoryForecastRepository()
+    repository.forecasts[1] = _committee_forecast()
+    client = TestClient(create_app(testing=True, repository=cast(ForecastRepository, repository)))
+
+    response = client.get("/api/v1/forecast/latest")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["final_bias"] == "bullish"
+    assert body["actionability"] == "trade_candidate"
+    assert body["prompt_versions"][0]["prompt_key"] == "trading_committee.chair.system"
+    assert "committee_decision" in body
+    assert "validation_status" in body
+
+
+def test_research_run_response_exposes_committee_forecast_metadata() -> None:
+    repository = InMemoryForecastRepository()
+    run_id = 7
+    repository.runs[run_id] = ResearchRunResult(
+        id=run_id,
+        status="success",
+        started_at=datetime.now(UTC),
+        completed_at=datetime.now(UTC),
+        input_summary={"symbol": "XAUUSD"},
+        forecast=_committee_forecast(),
+    )
+    client = TestClient(create_app(testing=True, repository=cast(ForecastRepository, repository)))
+
+    response = client.get(f"/api/v1/research-runs/{run_id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["forecast"]["final_bias"] == "bullish"
+    assert body["forecast"]["actionability"] == "trade_candidate"
+    assert body["forecast"]["prompt_versions"][0]["prompt_key"] == "trading_committee.chair.system"
+
+
 def _forecast() -> ForecastResult:
     now = datetime.now(UTC)
     return ForecastResult(
@@ -391,6 +481,37 @@ def _forecast() -> ForecastResult:
             )
         ],
         risk_notes=["仅供研究"],
+    )
+
+
+def _committee_forecast() -> FinalForecast:
+    base = _forecast().model_dump()
+    return FinalForecast(
+        **base,
+        final_bias=FinalBias.bullish,
+        actionability=Actionability.trade_candidate,
+        prompt_versions=[
+            PromptVersionMetadata(
+                prompt_key="trading_committee.chair.system",
+                version="1.0.0",
+                prompt_type="system",
+                agent_name="chair",
+                node_name="agent_trading_committee_chair",
+                model_family="gpt-4.1",
+                is_active=True,
+                rendered_variable_names=["evidence_package"],
+                output_schema_ref="CommitteeDecision",
+            )
+        ],
+        validation_status=None,
+        committee_decision=None,
+        evidence_package=None,
+        bull_opening_case=None,
+        bear_opening_case=None,
+        bull_rebuttal=None,
+        bear_rebuttal=None,
+        bull_final_position=None,
+        bear_final_position=None,
     )
 
 

@@ -100,6 +100,7 @@ def _fetch_gold_daily_bars_via_chart_websocket(*, start_date: date, end_date: da
             origin=TRADINGVIEW_CHART_ORIGIN,
             user_agent_header=TRADINGVIEW_CHART_USER_AGENT,
             ssl=ssl_context,
+            proxy=None,
             open_timeout=15,
             ping_interval=20,
             ping_timeout=20,

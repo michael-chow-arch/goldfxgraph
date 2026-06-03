@@ -227,6 +227,352 @@
         </section>
 
         <section class="dashboard-panel rounded-[28px] p-5 sm:p-6">
+          <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div class="space-y-2">
+              <p class="panel-title">Evidence Package Summary</p>
+              <h2 class="section-heading">委员会证据包</h2>
+              <p class="section-copy max-w-3xl">
+                先看 specialist 证据，再进入对抗式辩论。所有观点都必须回到这里的结构化事实。
+              </p>
+            </div>
+            <span class="font-mono text-[11px] tracking-[0.18em] text-slate-500">evidence package</span>
+          </div>
+
+          <div v-if="committeeDebateCards.length > 0" class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            <article
+              v-for="item in committeeDebateCards"
+              :key="item.id"
+              class="metric-card metric-card--soft border border-slate-400/10 bg-[#0f172a]/80"
+            >
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div class="space-y-1">
+                  <p class="font-mono text-sm font-semibold text-slate-50">{{ item.title }}</p>
+                  <p class="text-[11px] tracking-[0.18em] text-slate-300/50">{{ item.dataFreshness }}</p>
+                </div>
+                <span
+                  class="status-pill"
+                  :class="item.toolStatus === 'ok' ? 'status-pill--success' : item.toolStatus === 'degraded' ? 'status-pill--loading' : 'status-pill--danger'"
+                >
+                  {{ item.toolStatusLabel }}
+                </span>
+              </div>
+
+              <div class="mt-4 flex flex-wrap gap-2">
+                <span class="analysis-badge analysis-badge--accent">{{ item.signal }}</span>
+                <span class="analysis-badge analysis-badge--slate">置信度 {{ item.confidence }}</span>
+              </div>
+
+              <div class="mt-4 space-y-3 text-sm leading-6 text-slate-200/80">
+                <div>
+                  <p class="text-[11px] tracking-[0.18em] text-slate-300/45">关键证据</p>
+                  <p class="mt-1 whitespace-pre-line">{{ item.keyEvidence.join("；") || "—" }}</p>
+                </div>
+                <div>
+                  <p class="text-[11px] tracking-[0.18em] text-slate-300/45">风险信号</p>
+                  <p class="mt-1 whitespace-pre-line">{{ item.riskFactors.join("；") || "—" }}</p>
+                </div>
+                <div>
+                  <p class="text-[11px] tracking-[0.18em] text-slate-300/45">失效条件</p>
+                  <p class="mt-1 whitespace-pre-line">{{ item.invalidationConditions.join("；") || "—" }}</p>
+                </div>
+                <div>
+                  <p class="text-[11px] tracking-[0.18em] text-slate-300/45">重要价位</p>
+                  <p class="mt-1 whitespace-pre-line">{{ item.importantLevels.join("；") || "—" }}</p>
+                </div>
+              </div>
+            </article>
+          </div>
+
+          <div v-else class="metric-card metric-card--empty mt-4 text-sm text-slate-300/60">
+            当前还没有可展示的证据包。
+          </div>
+        </section>
+
+        <section class="dashboard-panel rounded-[28px] p-5 sm:p-6">
+          <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div class="space-y-2">
+              <p class="panel-title">Trading Committee Debate</p>
+              <h2 class="section-heading">两轮对抗式辩论</h2>
+              <p class="section-copy max-w-3xl">
+                Opening case 先建立最强论点，再通过 rebuttal 逐点回应对方，最后收束为最终立场。
+              </p>
+            </div>
+            <span class="font-mono text-[11px] tracking-[0.18em] text-slate-500">two-round debate</span>
+          </div>
+
+          <div class="mt-4 space-y-6">
+            <div>
+              <div class="flex items-center justify-between gap-3">
+                <p class="metric-label">Round 1 · Opening Case</p>
+                <span class="font-mono text-[11px] tracking-[0.18em] text-slate-300/55">bull / bear</span>
+              </div>
+              <div class="mt-3 grid gap-4 xl:grid-cols-2">
+                <article
+                  v-for="item in committeeOpeningCases"
+                  :key="`${item.side}-${item.thesis}`"
+                  class="metric-card metric-card--soft border border-slate-400/10 bg-[#0f172a]/80"
+                >
+                  <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div class="space-y-1">
+                      <p class="font-mono text-sm font-semibold text-slate-50">{{ item.sideLabel }}</p>
+                      <p class="text-[11px] tracking-[0.18em] text-slate-300/50">{{ item.entry_zone }}</p>
+                    </div>
+                    <span class="status-pill" :class="item.stanceClass">{{ DIRECTION_LABELS[item.side === 'bull' ? 'bullish' : 'bearish'] }}</span>
+                  </div>
+                  <p class="mt-3 text-sm leading-6 text-slate-200/85">{{ item.thesis }}</p>
+                  <dl class="mt-4 grid gap-3">
+                    <div class="metric-card metric-card--embedded">
+                      <dt class="metric-label">止损 / 失效</dt>
+                      <dd class="mt-1 text-sm text-slate-200/80">{{ item.stop_loss_or_invalidation }}</dd>
+                    </div>
+                    <div class="metric-card metric-card--embedded">
+                      <dt class="metric-label">目标区间</dt>
+                      <dd class="mt-1 text-sm text-slate-200/80">{{ item.target_zone }}</dd>
+                    </div>
+                    <div class="metric-card metric-card--embedded">
+                      <dt class="metric-label">风险回报</dt>
+                      <dd class="mt-1 text-sm text-slate-200/80">{{ item.risk_reward != null ? `${item.risk_reward.toFixed(2)} R` : "—" }}</dd>
+                    </div>
+                    <div class="metric-card metric-card--embedded">
+                      <dt class="metric-label">弱点承认</dt>
+                      <dd class="mt-1 text-sm leading-6 text-slate-200/80">{{ item.weakness_acknowledged.join("；") || "—" }}</dd>
+                    </div>
+                  </dl>
+                  <div class="mt-4 space-y-2">
+                    <p class="text-[11px] tracking-[0.18em] text-slate-300/45">支持论据</p>
+                    <p class="text-sm leading-6 text-slate-200/80">{{ item.supporting_arguments.join("；") || "—" }}</p>
+                  </div>
+                </article>
+              </div>
+            </div>
+
+            <div>
+              <div class="flex items-center justify-between gap-3">
+                <p class="metric-label">Round 2 · Rebuttal</p>
+                <span class="font-mono text-[11px] tracking-[0.18em] text-slate-300/55">逐点回应</span>
+              </div>
+              <div class="mt-3 grid gap-4 xl:grid-cols-2">
+                <article
+                  v-for="item in committeeRebuttals"
+                  :key="`${item.side}-${item.responds_to_side}-${item.confidence_change ?? 0}`"
+                  class="metric-card metric-card--soft border border-slate-400/10 bg-[#0f172a]/80"
+                >
+                  <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div class="space-y-1">
+                      <p class="font-mono text-sm font-semibold text-slate-50">{{ item.sideLabel }}</p>
+                      <p class="text-[11px] tracking-[0.18em] text-slate-300/50">{{ item.respondLabel }}</p>
+                    </div>
+                    <span class="status-pill" :class="item.stanceClass">Rebuttal</span>
+                  </div>
+                  <div class="mt-4 grid gap-3">
+                    <div class="metric-card metric-card--embedded">
+                      <dt class="metric-label">驳斥点</dt>
+                      <dd class="mt-1 text-sm leading-6 text-slate-200/80">{{ item.rebutted_points.join("；") || "—" }}</dd>
+                    </div>
+                    <div class="metric-card metric-card--embedded">
+                      <dt class="metric-label">接受点</dt>
+                      <dd class="mt-1 text-sm leading-6 text-slate-200/80">{{ item.accepted_points.join("；") || "—" }}</dd>
+                    </div>
+                    <div class="metric-card metric-card--embedded">
+                      <dt class="metric-label">计划调整</dt>
+                      <dd class="mt-1 text-sm leading-6 text-slate-200/80">{{ item.plan_adjustments.join("；") || "—" }}</dd>
+                    </div>
+                    <div class="metric-card metric-card--embedded">
+                      <dt class="metric-label">置信度变化</dt>
+                      <dd class="mt-1 text-sm leading-6 text-slate-200/80">
+                        {{ item.confidence_change != null ? `${item.confidence_trend} (${formatSignedPnl(item.confidence_change)})` : item.confidence_trend }}
+                      </dd>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </div>
+
+            <div>
+              <div class="flex items-center justify-between gap-3">
+                <p class="metric-label">Round 3 · Final Position</p>
+                <span class="font-mono text-[11px] tracking-[0.18em] text-slate-300/55">终局立场</span>
+              </div>
+              <div class="mt-3 grid gap-4 xl:grid-cols-2">
+                <article
+                  v-for="item in committeeFinalPositions"
+                  :key="`${item.side}-${item.confidence}`"
+                  class="metric-card metric-card--soft border border-slate-400/10 bg-[#0f172a]/80"
+                >
+                  <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div class="space-y-1">
+                      <p class="font-mono text-sm font-semibold text-slate-50">{{ item.sideLabel }}</p>
+                      <p class="text-[11px] tracking-[0.18em] text-slate-300/50">{{ item.stance }}</p>
+                    </div>
+                    <span class="status-pill" :class="item.stanceClass">置信度 {{ formatPercent(item.confidence) }}</span>
+                  </div>
+                  <div class="mt-4 grid gap-3">
+                    <div class="metric-card metric-card--embedded">
+                      <dt class="metric-label">采纳论据</dt>
+                      <dd class="mt-1 text-sm leading-6 text-slate-200/80">{{ item.adopted_arguments.join("；") || "—" }}</dd>
+                    </div>
+                    <div class="metric-card metric-card--embedded">
+                      <dt class="metric-label">放弃条件</dt>
+                      <dd class="mt-1 text-sm leading-6 text-slate-200/80">{{ item.abandon_conditions.join("；") || "—" }}</dd>
+                    </div>
+                    <div class="metric-card metric-card--embedded">
+                      <dt class="metric-label">计划调整</dt>
+                      <dd class="mt-1 text-sm leading-6 text-slate-200/80">{{ item.plan_adjustments.join("；") || "—" }}</dd>
+                    </div>
+                    <div class="metric-card metric-card--embedded">
+                      <dt class="metric-label">拒绝论据</dt>
+                      <dd class="mt-1 text-sm leading-6 text-slate-200/80">{{ item.rejected_arguments.join("；") || "—" }}</dd>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="dashboard-panel rounded-[28px] p-5 sm:p-6">
+          <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div class="space-y-2">
+              <p class="panel-title">Committee Chair Decision</p>
+              <h2 class="section-heading">主席仲裁与验证</h2>
+              <p class="section-copy max-w-3xl">
+                主席不是摘要器，而是裁决者。它综合证据包、Opening、Rebuttal 和 Final Position，输出最终 bias 和可执行性。
+              </p>
+            </div>
+            <span class="font-mono text-[11px] tracking-[0.18em] text-slate-500">chair decision</span>
+          </div>
+
+          <div class="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
+            <article class="metric-card metric-card--soft border border-emerald-300/20 bg-[#0f172a]/85 p-5">
+              <div class="flex flex-wrap items-center justify-between gap-3">
+                <div class="space-y-2">
+                  <p class="font-mono text-xs tracking-[0.18em] text-slate-300/55">final bias</p>
+                  <h3 class="text-2xl font-semibold text-slate-50">{{ committeeBiasLabel }}</h3>
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="status-pill" :class="committeeActionabilityToneClass">{{ committeeActionabilityLabel }}</span>
+                  <span class="status-pill" :class="committeeValidationToneClass">{{ committeeValidationLabel }}</span>
+                </div>
+              </div>
+
+              <div v-if="committeeTradePlan" class="mt-4 flex flex-wrap gap-2">
+                <span class="analysis-badge analysis-badge--accent">{{ committeeTradePlan.title }}</span>
+                <span class="analysis-badge analysis-badge--slate">{{ committeeTradePlan.biasLabel }}</span>
+              </div>
+
+              <div class="mt-4 grid gap-3 sm:grid-cols-2">
+                <div class="metric-card metric-card--embedded">
+                  <dt class="metric-label">胜出方</dt>
+                  <dd class="mt-1 text-sm text-slate-200/80">{{ committeeWinningSideLabel }}</dd>
+                </div>
+                <div class="metric-card metric-card--embedded">
+                  <dt class="metric-label">最终置信度</dt>
+                  <dd class="mt-1 text-sm text-slate-200/80">{{ forecast ? formatPercent(forecast.confidence_score) : "—" }}</dd>
+                </div>
+                <div class="metric-card metric-card--embedded">
+                  <dt class="metric-label">采纳论据</dt>
+                  <dd class="mt-1 text-sm leading-6 text-slate-200/80">{{ committeeAdoptedArguments.join("；") || "—" }}</dd>
+                </div>
+                <div class="metric-card metric-card--embedded">
+                  <dt class="metric-label">拒绝论据</dt>
+                  <dd class="mt-1 text-sm leading-6 text-slate-200/80">{{ committeeRejectedArguments.join("；") || "—" }}</dd>
+                </div>
+              </div>
+
+              <p class="mt-4 text-sm leading-7 text-slate-200/85">
+                {{ committeeDecision?.decision_summary ?? "当前尚无主席裁决摘要。" }}
+              </p>
+
+              <div class="mt-5 space-y-3">
+                <p class="text-[11px] tracking-[0.18em] text-slate-300/45">最终交易计划</p>
+                <div v-if="committeeTradePlan && committeeTradePlan.tradePlan" class="grid gap-3 sm:grid-cols-2">
+                  <div v-for="row in committeeTradePlanRows" :key="row.label" class="metric-card metric-card--embedded">
+                    <dt class="metric-label">{{ row.label }}</dt>
+                    <dd class="mt-1 text-sm leading-6 text-slate-200/80">{{ row.value }}</dd>
+                  </div>
+                </div>
+                <div v-else class="metric-card metric-card--empty text-sm text-slate-300/60">
+                  {{ committeeDecision?.wait_conditions?.length ? committeeDecision.wait_conditions.join("；") : "当前不适合直接入场，等待条件不足。" }}
+                </div>
+              </div>
+            </article>
+
+            <aside class="space-y-4">
+              <article class="dashboard-panel rounded-[28px] p-4">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="space-y-1">
+                    <p class="panel-title">Validation Status</p>
+                    <h3 class="text-lg font-semibold text-slate-50">规则校验与修复</h3>
+                  </div>
+                  <span class="status-pill" :class="committeeValidationToneClass">{{ committeeValidationLabel }}</span>
+                </div>
+
+                <p class="mt-3 text-sm leading-6 text-slate-200/80">{{ committeeValidationSummary }}</p>
+
+                <div class="mt-4 space-y-3">
+                  <div v-if="committeeValidationWarnings.length > 0" class="space-y-2">
+                    <p class="text-[11px] tracking-[0.18em] text-slate-300/45">warnings</p>
+                    <div v-for="(warning, index) in committeeValidationWarnings" :key="`warning-${index}-${warning}`" class="metric-card metric-card--embedded">
+                      <p class="text-sm leading-6 text-slate-200/80">{{ warning }}</p>
+                    </div>
+                  </div>
+                  <div v-if="committeeValidationErrors.length > 0" class="space-y-2">
+                    <p class="text-[11px] tracking-[0.18em] text-slate-300/45">errors</p>
+                    <div v-for="(error, index) in committeeValidationErrors" :key="`error-${index}-${error}`" class="metric-card metric-card--embedded">
+                      <p class="text-sm leading-6 text-slate-200/80">{{ error }}</p>
+                    </div>
+                  </div>
+                </div>
+              </article>
+
+              <article class="dashboard-panel rounded-[28px] p-4">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="space-y-1">
+                    <p class="panel-title">Prompt Version Metadata</p>
+                    <h3 class="text-lg font-semibold text-slate-50">实际使用的 prompt</h3>
+                  </div>
+                  <span class="analysis-badge analysis-badge--accent">{{ committeePromptVersions.length }}</span>
+                </div>
+
+                <div v-if="committeePromptVersions.length > 0" class="mt-4 space-y-2">
+                  <div v-for="prompt in committeePromptVersions" :key="`${prompt.prompt_key}-${prompt.version}`" class="metric-card metric-card--embedded">
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                      <p class="font-mono text-xs tracking-[0.18em] text-slate-300/70">{{ prompt.prompt_key }}</p>
+                      <span class="status-pill status-pill--neutral">v{{ prompt.version }}</span>
+                    </div>
+                    <p class="mt-2 text-sm leading-6 text-slate-200/80">
+                      {{ prompt.agent_name ?? prompt.node_name ?? prompt.prompt_type }}
+                    </p>
+                  </div>
+                </div>
+                <div v-else class="metric-card metric-card--empty mt-4 text-sm text-slate-300/60">
+                  当前没有可展示的 prompt 元数据。
+                </div>
+              </article>
+
+              <article class="dashboard-panel rounded-[28px] p-4">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="space-y-1">
+                    <p class="panel-title">Graph Execution Trace</p>
+                    <h3 class="text-lg font-semibold text-slate-50">节点执行轨迹</h3>
+                  </div>
+                  <span class="font-mono text-[11px] tracking-[0.18em] text-slate-300/55">completed / running / failed / pending</span>
+                </div>
+
+                <div class="mt-4 grid gap-2">
+                  <div v-for="node in committeeTraceNodes" :key="node.key" class="metric-card metric-card--embedded">
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                      <p class="font-mono text-xs tracking-[0.18em] text-slate-300/70">{{ node.label }}</p>
+                      <span class="status-pill" :class="node.statusClass">{{ node.statusLabel }}</span>
+                    </div>
+                  </div>
+                </div>
+              </article>
+            </aside>
+          </div>
+        </section>
+
+        <section class="dashboard-panel rounded-[28px] p-5 sm:p-6">
           <div class="flex items-center justify-between gap-3">
             <div class="space-y-2">
               <p class="panel-title">智能体投票</p>
@@ -819,9 +1165,12 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
 import {
+  ACTIONABILITY_LABELS,
   AGENT_LABELS,
   DIRECTION_LABELS,
   DIRECTION_STYLES,
+  COMMITTEE_BIAS_LABELS,
+  COMMITTEE_NODE_LABELS,
   HISTORY_RESULT_LABELS,
   EMPTY_FORECAST_MESSAGE,
   ERROR_FORECAST_MESSAGE,
@@ -842,14 +1191,20 @@ import {
 } from "@/services/forecastApi";
 import type {
   AgentVote,
+  CommitteeDecision,
   DailyBar,
+  DebateCase,
+  DebateRebuttal,
+  FinalForecast,
+  FinalDebatePosition,
   ForecastDirection,
   ForecastHistoryItem,
-  ForecastResult,
   SchedulerRunStatus,
+  EvidencePackage,
+  PromptVersionMetadata,
 } from "@/types/forecast";
 
-const forecast = ref<ForecastResult | null>(null);
+const forecast = ref<FinalForecast | null>(null);
 const schedulerStatus = ref<SchedulerRunStatus | null>(null);
 const isLoading = ref(true);
 const isStatusLoading = ref(true);
@@ -864,6 +1219,39 @@ const marketBarsErrorMessage = ref("");
 const marketSessionClock = ref(new Date());
 let marketSessionTimer: ReturnType<typeof window.setInterval> | null = null;
 let liveRefreshTimer: ReturnType<typeof window.setInterval> | null = null;
+
+const COMMITTEE_TRACE_SEQUENCE = [
+  "router_validate_request",
+  "tool_load_market_data",
+  "tool_ensure_market_data_freshness",
+  "tool_fetch_current_gold_quote",
+  "tool_compute_indicators",
+  "agent_technical_analysis",
+  "tool_fetch_macro_inputs",
+  "agent_macro_analysis",
+  "tool_fetch_newsflow_inputs",
+  "agent_news_analysis",
+  "tool_fetch_pizza_index_inputs",
+  "tool_load_forecast_feedback_history",
+  "tool_fetch_polymarket_inputs",
+  "tool_fetch_market_sentiment_inputs",
+  "tool_fetch_alt_data_inputs",
+  "agent_market_sentiment_analysis",
+  "agent_alt_data_analysis",
+  "agent_risk_analysis",
+  "node_build_evidence_package",
+  "agent_bull_opening_case",
+  "agent_bear_opening_case",
+  "agent_bull_rebuttal",
+  "agent_bear_rebuttal",
+  "agent_bull_final_position",
+  "agent_bear_final_position",
+  "agent_trading_committee_chair",
+  "node_validate_committee_decision",
+  "agent_repair_committee_decision",
+  "node_persist_forecast",
+  "router_finalize_result",
+] as const;
 
 const stateLabel = computed(() => {
   if (isLoading.value) {
@@ -1038,6 +1426,8 @@ const heroChips = computed(() => {
     { label: "标的", value: forecast.value.symbol },
     { label: "当日方向", value: directionLabel.value },
     { label: "置信度", value: formatPercent(forecast.value.confidence_score) },
+    { label: "委员会裁决", value: committeeBiasLabel.value },
+    { label: "可执行性", value: committeeActionabilityLabel.value },
   ];
 });
 
@@ -1106,6 +1496,362 @@ const tradeLevelCards = computed(() => {
     { label: "止损价", value: formatOptionalPrice(forecast.value.stop_loss_price) },
   ];
 });
+
+const committeeDecision = computed<CommitteeDecision | null>(() => forecast.value?.committee_decision ?? null);
+
+const committeeEvidencePackage = computed<EvidencePackage | null>(() => {
+  if (forecast.value?.evidence_package) {
+    return forecast.value.evidence_package;
+  }
+  return committeeDecision.value?.evidence_package ?? null;
+});
+
+const committeeBiasLabel = computed(() => {
+  if (!forecast.value) {
+    return "未决";
+  }
+  return COMMITTEE_BIAS_LABELS[forecast.value.final_bias ?? committeeDecision.value?.final_bias ?? "cautious"] ?? "未决";
+});
+
+const committeeActionabilityLabel = computed(() => {
+  if (!forecast.value) {
+    return "未决";
+  }
+  return ACTIONABILITY_LABELS[forecast.value.actionability ?? committeeDecision.value?.actionability ?? "observe_only"] ?? "未决";
+});
+
+const committeeActionabilityToneClass = computed(() => {
+  const value = forecast.value?.actionability ?? committeeDecision.value?.actionability;
+  if (value === "trade_candidate") {
+    return "status-pill--success";
+  }
+  if (value === "no_trade") {
+    return "status-pill--danger";
+  }
+  return "status-pill--neutral";
+});
+
+const committeeValidationLabel = computed(() => {
+  const validationStatus = forecast.value?.validation_status;
+  if (!validationStatus) {
+    return "未校验";
+  }
+  return validationStatus.is_valid ? "校验通过" : "校验失败";
+});
+
+const committeeValidationToneClass = computed(() => {
+  const validationStatus = forecast.value?.validation_status;
+  if (!validationStatus) {
+    return "status-pill--neutral";
+  }
+  return validationStatus.is_valid ? "status-pill--success" : "status-pill--danger";
+});
+
+const committeeValidationSummary = computed(() => forecast.value?.validation_status?.summary ?? "尚无校验摘要。");
+const committeeWinningSideLabel = computed(() => {
+  const side = committeeDecision.value?.winning_side;
+  if (side === "bull") {
+    return "多头";
+  }
+  if (side === "bear") {
+    return "空头";
+  }
+  if (side === "none") {
+    return "无明确胜者";
+  }
+  return "未决";
+});
+
+const committeePromptVersions = computed(() => forecast.value?.prompt_versions ?? []);
+
+const committeeTraceNodes = computed(() => {
+  const hasForecast = Boolean(forecast.value);
+  const schedulerState = schedulerStatus.value?.status ?? null;
+  const currentStage = schedulerStatus.value?.current_stage ?? "";
+  const currentIndex = COMMITTEE_TRACE_SEQUENCE.indexOf(currentStage as (typeof COMMITTEE_TRACE_SEQUENCE)[number]);
+
+  return COMMITTEE_TRACE_SEQUENCE.map((key, index) => {
+    let status: "completed" | "running" | "failed" | "pending" = "pending";
+
+    if (schedulerState === "running") {
+      if (currentIndex >= 0 && index < currentIndex) {
+        status = "completed";
+      } else if (currentIndex >= 0 && index === currentIndex) {
+        status = "running";
+      }
+    } else if (schedulerState === "failed") {
+      if (currentIndex >= 0 && index < currentIndex) {
+        status = "completed";
+      } else if (currentIndex >= 0 && index === currentIndex) {
+        status = "failed";
+      }
+    } else if (schedulerState === "success") {
+      status = "completed";
+    } else if (hasForecast) {
+      status = "completed";
+    }
+
+    return {
+      key,
+      label: COMMITTEE_NODE_LABELS[key] ?? key,
+      status,
+      statusLabel: committeeTraceStatusLabel(status),
+      statusClass: committeeTraceStatusClass(status),
+    };
+  });
+});
+
+const committeeDebateCards = computed(() => {
+  const evidencePackage = committeeEvidencePackage.value;
+  if (!evidencePackage) {
+    return [];
+  }
+
+  return evidencePackage.items.map((item) => ({
+    id: item.item_id,
+    title: item.specialist_name,
+    signal: item.signal,
+    confidence: formatPercent(item.confidence),
+    toolStatus: item.tool_status,
+    toolStatusLabel:
+      item.tool_status === "ok" ? "正常" : item.tool_status === "degraded" ? "降级" : "不可用",
+    keyEvidence: item.key_evidence,
+    riskFactors: item.risk_factors,
+    invalidationConditions: item.invalidation_conditions,
+    importantLevels: item.important_levels,
+    dataFreshness: item.data_freshness ?? "—",
+    degradedReason: item.degraded_reason,
+    evidenceRefs: item.evidence_refs,
+  }));
+});
+
+const committeeOpeningCases = computed(() => {
+  const decision = committeeDecision.value;
+  const cases = [
+    forecast.value?.bull_opening_case ?? decision?.bull_opening_case,
+    forecast.value?.bear_opening_case ?? decision?.bear_opening_case,
+  ].filter(Boolean) as DebateCase[];
+  if (cases.length === 0) {
+    return [
+      {
+        side: "bull",
+        sideLabel: "多头开场",
+        stanceClass: "status-pill--success",
+        thesis: "当前快照未包含多头开场内容。",
+        entry_zone: "等待当前研究快照完成后显示",
+        stop_loss_or_invalidation: "等待当前研究快照完成后显示",
+        target_zone: "等待当前研究快照完成后显示",
+        risk_reward: null,
+        weakness_acknowledged: ["当前尚无可展示的 Opening Case 数据。"],
+        supporting_arguments: ["等待新的委员会研究结果写入后自动显示。"],
+        confidence: null,
+        notes: ["当前快照只包含部分委员会元数据。"],
+      },
+      {
+        side: "bear",
+        sideLabel: "空头开场",
+        stanceClass: "status-pill--danger",
+        thesis: "当前快照未包含空头开场内容。",
+        entry_zone: "等待当前研究快照完成后显示",
+        stop_loss_or_invalidation: "等待当前研究快照完成后显示",
+        target_zone: "等待当前研究快照完成后显示",
+        risk_reward: null,
+        weakness_acknowledged: ["当前尚无可展示的 Opening Case 数据。"],
+        supporting_arguments: ["等待新的委员会研究结果写入后自动显示。"],
+        confidence: null,
+        notes: ["当前快照只包含部分委员会元数据。"],
+      },
+    ];
+  }
+  return cases.map((item) => ({
+    ...item,
+    sideLabel: item.side === "bull" ? "多头开场" : "空头开场",
+    stanceClass: item.side === "bull" ? "status-pill--success" : "status-pill--danger",
+  }));
+});
+
+const committeeRebuttals = computed(() => {
+  const decision = committeeDecision.value;
+  const rebuttals = [forecast.value?.bull_rebuttal ?? decision?.bull_rebuttal, forecast.value?.bear_rebuttal ?? decision?.bear_rebuttal].filter(Boolean) as DebateRebuttal[];
+  if (rebuttals.length === 0) {
+    return [
+      {
+        side: "bull",
+        responds_to_side: "bear",
+        sideLabel: "多头反驳",
+        respondLabel: "回应空头",
+        stanceClass: "status-pill--success",
+        rebutted_points: ["当前快照未包含多头 rebuttal 内容。"],
+        accepted_points: ["等待当前研究快照完成后显示。"],
+        plan_adjustments: ["等待当前研究快照完成后显示。"],
+        confidence_trend: "flat",
+        confidence_change: null,
+        evidence_item_refs: [],
+        notes: ["当前快照只包含部分委员会元数据。"],
+      },
+      {
+        side: "bear",
+        responds_to_side: "bull",
+        sideLabel: "空头反驳",
+        respondLabel: "回应多头",
+        stanceClass: "status-pill--danger",
+        rebutted_points: ["当前快照未包含空头 rebuttal 内容。"],
+        accepted_points: ["等待当前研究快照完成后显示。"],
+        plan_adjustments: ["等待当前研究快照完成后显示。"],
+        confidence_trend: "flat",
+        confidence_change: null,
+        evidence_item_refs: [],
+        notes: ["当前快照只包含部分委员会元数据。"],
+      },
+    ];
+  }
+  return rebuttals.map((item) => ({
+    ...item,
+    sideLabel: item.side === "bull" ? "多头反驳" : "空头反驳",
+    respondLabel: item.responds_to_side === "bull" ? "回应多头" : "回应空头",
+    stanceClass: item.side === "bull" ? "status-pill--success" : "status-pill--danger",
+  }));
+});
+
+const committeeFinalPositions = computed(() => {
+  const decision = committeeDecision.value;
+  const positions = [
+    forecast.value?.bull_final_position ?? decision?.bull_final_position,
+    forecast.value?.bear_final_position ?? decision?.bear_final_position,
+  ].filter(Boolean) as FinalDebatePosition[];
+  if (positions.length === 0) {
+    return [
+      {
+        side: "bull",
+        sideLabel: "多头终局",
+        stance: "soften",
+        stanceClass: "status-pill--neutral",
+        confidence: 0,
+        confidence_change: null,
+        adopted_arguments: ["当前快照未包含多头终局内容。"],
+        rejected_arguments: ["等待当前研究快照完成后显示。"],
+        plan_adjustments: ["等待当前研究快照完成后显示。"],
+        abandon_conditions: ["等待当前研究快照完成后显示。"],
+        evidence_item_refs: [],
+        notes: ["当前快照只包含部分委员会元数据。"],
+      },
+      {
+        side: "bear",
+        sideLabel: "空头终局",
+        stance: "soften",
+        stanceClass: "status-pill--neutral",
+        confidence: 0,
+        confidence_change: null,
+        adopted_arguments: ["当前快照未包含空头终局内容。"],
+        rejected_arguments: ["等待当前研究快照完成后显示。"],
+        plan_adjustments: ["等待当前研究快照完成后显示。"],
+        abandon_conditions: ["等待当前研究快照完成后显示。"],
+        evidence_item_refs: [],
+        notes: ["当前快照只包含部分委员会元数据。"],
+      },
+    ];
+  }
+  return positions.map((item) => ({
+    ...item,
+    sideLabel: item.side === "bull" ? "多头终局" : "空头终局",
+    stanceClass:
+      item.stance === "maintain"
+        ? "status-pill--success"
+        : item.stance === "soften"
+          ? "status-pill--neutral"
+          : "status-pill--danger",
+  }));
+});
+
+const committeeTradePlan = computed(() => {
+  const decision = committeeDecision.value;
+  if (!decision) {
+    return null;
+  }
+
+  if (decision.final_bias === "bullish" && decision.long_plan) {
+    return {
+      title: "做多计划",
+      biasLabel: committeeBiasLabel.value,
+      tradePlan: decision.long_plan,
+      entryLabel: "入场区间",
+      stopLabel: "止损 / 失效",
+      targetLabel: "目标区间",
+    };
+  }
+
+  if (decision.final_bias === "bearish" && decision.short_plan) {
+    return {
+      title: "做空计划",
+      biasLabel: committeeBiasLabel.value,
+      tradePlan: decision.short_plan,
+      entryLabel: "入场区间",
+      stopLabel: "止损 / 失效",
+      targetLabel: "目标区间",
+    };
+  }
+
+  if (decision.final_bias === "range_bound" && decision.range_plan) {
+    return {
+      title: "区间计划",
+      biasLabel: committeeBiasLabel.value,
+      tradePlan: decision.range_plan,
+      entryLabel: "区间卖出",
+      stopLabel: "区间止损",
+      targetLabel: "中线目标",
+    };
+  }
+
+  return {
+    title: "谨慎观望",
+    biasLabel: committeeBiasLabel.value,
+    tradePlan: null,
+    entryLabel: "等待条件",
+    stopLabel: "风险失效",
+    targetLabel: "执行前提",
+  };
+});
+
+const committeeTradePlanRows = computed(() => {
+  const plan = committeeTradePlan.value;
+  if (!plan || !plan.tradePlan) {
+    return [];
+  }
+
+  if (plan.tradePlan && "upper_sell_zone" in plan.tradePlan) {
+    return [
+      { label: "高点卖出区", value: plan.tradePlan.upper_sell_zone },
+      { label: "低点买入区", value: plan.tradePlan.lower_buy_zone },
+      { label: "上方止损", value: plan.tradePlan.upper_stop },
+      { label: "下方止损", value: plan.tradePlan.lower_stop },
+      { label: "中线目标", value: plan.tradePlan.midline_target },
+      { label: "突破确认", value: plan.tradePlan.breakout_confirmation_level },
+      { label: "跌破确认", value: plan.tradePlan.breakdown_confirmation_level },
+      { label: "区间失效", value: plan.tradePlan.range_invalidated_if },
+    ];
+  }
+
+  return [
+    { label: plan.entryLabel, value: plan.tradePlan.entry_zone },
+    { label: plan.stopLabel, value: plan.tradePlan.stop_loss ?? plan.tradePlan.invalidation_level ?? "—" },
+    { label: plan.targetLabel, value: plan.tradePlan.target_zone },
+    { label: "风险回报比", value: plan.tradePlan.risk_reward != null ? `${plan.tradePlan.risk_reward.toFixed(2)} R` : "—" },
+    {
+      label: "入场条件",
+      value: plan.tradePlan.conditions_to_enter.length > 0 ? plan.tradePlan.conditions_to_enter.join("；") : "—",
+    },
+    {
+      label: "退出条件",
+      value: plan.tradePlan.conditions_to_abort.length > 0 ? plan.tradePlan.conditions_to_abort.join("；") : "—",
+    },
+  ];
+});
+
+const committeeValidationErrors = computed(() => forecast.value?.validation_status?.errors ?? []);
+const committeeValidationWarnings = computed(() => forecast.value?.validation_status?.warnings ?? []);
+const committeeAdoptedArguments = computed(() => committeeDecision.value?.adopted_arguments ?? []);
+const committeeRejectedArguments = computed(() => committeeDecision.value?.rejected_arguments ?? []);
+const committeeWaitConditions = computed(() => committeeDecision.value?.wait_conditions ?? []);
 
 const entryLevelLabel = computed(() => {
   if (
@@ -1505,7 +2251,7 @@ function voteDirectionClass(direction: ForecastDirection): string {
 
 function schedulerAgentStatusLabel(status: string): string {
   const labelMap: Record<string, string> = {
-    pending: "分析中",
+    pending: "待执行",
     running: "执行中",
     success: "已完成",
     failed: "已失败",
@@ -1516,6 +2262,8 @@ function schedulerAgentStatusLabel(status: string): string {
 
 function schedulerAgentStatusClass(status: string): string {
   switch (status) {
+    case "pending":
+      return "status-pill--neutral";
     case "running":
       return "status-pill--loading";
     case "success":
@@ -1529,6 +2277,8 @@ function schedulerAgentStatusClass(status: string): string {
 
 function schedulerAgentDotClass(status: string): string {
   switch (status) {
+    case "pending":
+      return "agent-state-chip__dot--neutral";
     case "running":
       return "agent-state-chip__dot--warning";
     case "success":
@@ -1537,6 +2287,32 @@ function schedulerAgentDotClass(status: string): string {
       return "agent-state-chip__dot--danger";
     default:
       return "agent-state-chip__dot--warning";
+  }
+}
+
+function committeeTraceStatusLabel(status: "completed" | "running" | "failed" | "pending"): string {
+  switch (status) {
+    case "completed":
+      return "已完成";
+    case "running":
+      return "执行中";
+    case "failed":
+      return "已失败";
+    case "pending":
+      return "待执行";
+  }
+}
+
+function committeeTraceStatusClass(status: "completed" | "running" | "failed" | "pending"): string {
+  switch (status) {
+    case "completed":
+      return "status-pill--success";
+    case "running":
+      return "status-pill--loading";
+    case "failed":
+      return "status-pill--danger";
+    case "pending":
+      return "status-pill--neutral";
   }
 }
 

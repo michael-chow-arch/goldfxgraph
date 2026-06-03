@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, Date, DateTime, Float, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, CheckConstraint, Date, DateTime, Float, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -34,6 +34,43 @@ class MarketDataBarModel(Base):
     close: Mapped[float] = mapped_column(Float, nullable=False)
     volume: Mapped[float | None] = mapped_column(Float, nullable=True)
     source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
+    )
+
+
+class PromptTemplateModel(Base):
+    __tablename__ = "prompt_templates"
+    __table_args__ = (
+        UniqueConstraint("prompt_key", "version", name="uq_prompt_templates_prompt_key_version"),
+        CheckConstraint("prompt_key <> ''", name="ck_prompt_templates_prompt_key_not_empty"),
+        CheckConstraint("version <> ''", name="ck_prompt_templates_version_not_empty"),
+        CheckConstraint("prompt_text_en <> ''", name="ck_prompt_templates_prompt_text_en_not_empty"),
+        CheckConstraint("prompt_text_zh <> ''", name="ck_prompt_templates_prompt_text_zh_not_empty"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    prompt_key: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    agent_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    node_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    prompt_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    version: Mapped[str] = mapped_column(String(64), nullable=False)
+    prompt_text_en: Mapped[str] = mapped_column(Text, nullable=False)
+    prompt_text_zh: Mapped[str] = mapped_column(Text, nullable=False)
+    variables_schema: Mapped[dict[str, Any]] = mapped_column(
+        MutableDict.as_mutable(JSON),
+        default=dict,
+        nullable=False,
+    )
+    output_schema_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    model_family: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    change_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -132,6 +169,20 @@ class ForecastModel(Base):
     )
     risk_notes: Mapped[list[str]] = mapped_column(MutableList.as_mutable(JSON), default=list, nullable=False)
     disclaimer: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_package: Mapped[dict[str, Any] | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True)
+    bull_opening_case: Mapped[dict[str, Any] | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True)
+    bear_opening_case: Mapped[dict[str, Any] | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True)
+    bull_rebuttal: Mapped[dict[str, Any] | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True)
+    bear_rebuttal: Mapped[dict[str, Any] | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True)
+    bull_final_position: Mapped[dict[str, Any] | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True)
+    bear_final_position: Mapped[dict[str, Any] | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True)
+    committee_decision: Mapped[dict[str, Any] | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True)
+    validation_status: Mapped[dict[str, Any] | None] = mapped_column(MutableDict.as_mutable(JSON), nullable=True)
+    prompt_versions: Mapped[list[dict[str, Any]]] = mapped_column(
+        MutableList.as_mutable(JSON),
+        default=list,
+        nullable=False,
+    )
 
     run: Mapped[ResearchRunModel] = relationship(back_populates="forecast")
     evaluation: Mapped[ForecastEvaluationModel | None] = relationship(
