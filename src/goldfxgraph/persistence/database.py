@@ -46,6 +46,16 @@ def _ensure_forecast_columns(connection) -> None:
         "window_directions": "JSON",
         "entry_price_low": "FLOAT",
         "entry_price_high": "FLOAT",
+        "evidence_package": "JSON",
+        "bull_opening_case": "JSON",
+        "bear_opening_case": "JSON",
+        "bull_rebuttal": "JSON",
+        "bear_rebuttal": "JSON",
+        "bull_final_position": "JSON",
+        "bear_final_position": "JSON",
+        "committee_decision": "JSON",
+        "validation_status": "JSON",
+        "prompt_versions": "JSON",
     }
 
     for column_name, column_type in required_columns.items():

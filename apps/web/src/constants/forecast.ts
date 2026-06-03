@@ -27,6 +27,61 @@ export const AGENT_LABELS: Record<string, string> = {
   alt_data: "另类数据",
   risk: "风险分析",
   planner: "预测规划",
+  bull_opening_case: "多头开场",
+  bear_opening_case: "空头开场",
+  bull_rebuttal: "多头反驳",
+  bear_rebuttal: "空头反驳",
+  bull_final_position: "多头终局",
+  bear_final_position: "空头终局",
+  chair: "委员会主席",
+  repair: "修复委员会",
+};
+
+export const COMMITTEE_BIAS_LABELS: Record<string, string> = {
+  bullish: "看多",
+  bearish: "看空",
+  range_bound: "区间震荡",
+  cautious: "谨慎观望",
+};
+
+export const ACTIONABILITY_LABELS: Record<string, string> = {
+  trade_candidate: "可交易候选",
+  prepare_only: "仅准备",
+  observe_only: "仅观察",
+  no_trade: "不交易",
+};
+
+export const COMMITTEE_NODE_LABELS: Record<string, string> = {
+  router_validate_request: "请求校验",
+  tool_load_market_data: "加载市场数据",
+  tool_ensure_market_data_freshness: "检查数据鲜度",
+  tool_fetch_current_gold_quote: "获取最新行情",
+  tool_compute_indicators: "计算技术指标",
+  agent_technical_analysis: "技术分析",
+  tool_fetch_macro_inputs: "宏观输入",
+  agent_macro_analysis: "宏观分析",
+  tool_fetch_newsflow_inputs: "新闻输入",
+  agent_news_analysis: "新闻分析",
+  tool_fetch_pizza_index_inputs: "Pizza 指数",
+  tool_load_forecast_feedback_history: "反馈历史",
+  tool_fetch_polymarket_inputs: "Polymarket",
+  tool_fetch_market_sentiment_inputs: "市场情绪输入",
+  tool_fetch_alt_data_inputs: "另类数据输入",
+  agent_market_sentiment_analysis: "市场情绪分析",
+  agent_alt_data_analysis: "另类数据分析",
+  agent_risk_analysis: "风险分析",
+  node_build_evidence_package: "构建证据包",
+  agent_bull_opening_case: "多头开场",
+  agent_bear_opening_case: "空头开场",
+  agent_bull_rebuttal: "多头反驳",
+  agent_bear_rebuttal: "空头反驳",
+  agent_bull_final_position: "多头终局",
+  agent_bear_final_position: "空头终局",
+  agent_trading_committee_chair: "主席仲裁",
+  node_validate_committee_decision: "校验决策",
+  agent_repair_committee_decision: "修复决策",
+  node_persist_forecast: "持久化 forecast",
+  router_finalize_result: "结束",
 };
 
 export const SUMMARY_SECTIONS = [

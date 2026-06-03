@@ -8,6 +8,7 @@ from pathlib import Path
 from goldfxgraph.packages.common.settings import load_settings
 from goldfxgraph.persistence.database import create_session_factory, init_models
 from goldfxgraph.persistence.repositories import ForecastRepository
+from goldfxgraph.persistence.seed_prompt_templates import seed_default_committee_prompt_templates
 from goldfxgraph.workflow.executor import run_forecast_workflow
 
 
@@ -36,6 +37,8 @@ async def _run_research(*, settings, entrypoint: str) -> int:
     run_id: int | None = None
     try:
         await init_models(session_factory.engine)
+        if hasattr(session_factory, "sessionmaker"):
+            await seed_default_committee_prompt_templates(session_factory)
         repository = ForecastRepository(session_factory)
         run = await repository.create_research_run({"symbol": "XAUUSD", "entrypoint": entrypoint})
         run_id = int(run.id)

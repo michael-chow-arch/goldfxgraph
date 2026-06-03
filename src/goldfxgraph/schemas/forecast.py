@@ -14,6 +14,37 @@ class ForecastDirection(StrEnum):
     neutral = "neutral"
 
 
+class FinalBias(StrEnum):
+    bullish = "bullish"
+    bearish = "bearish"
+    range_bound = "range_bound"
+    cautious = "cautious"
+
+
+class Actionability(StrEnum):
+    trade_candidate = "trade_candidate"
+    prepare_only = "prepare_only"
+    observe_only = "observe_only"
+    no_trade = "no_trade"
+
+
+class DebateSide(StrEnum):
+    bull = "bull"
+    bear = "bear"
+
+
+class EvidenceToolStatus(StrEnum):
+    ok = "ok"
+    degraded = "degraded"
+    unavailable = "unavailable"
+
+
+class DebateStance(StrEnum):
+    maintain = "maintain"
+    soften = "soften"
+    abandon = "abandon"
+
+
 class DailyBar(BaseModel):
     model_config = ConfigDict(allow_inf_nan=False)
 
@@ -117,6 +148,172 @@ class ForecastResult(BaseModel):
     disclaimer: str = "本结果仅用于研究和决策支持，不构成金融建议、投资建议或交易指令。"
 
 
+class EvidencePackageItem(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
+
+    item_id: str
+    specialist_name: str
+    category: str
+    signal: str
+    confidence: float = Field(ge=0, le=1)
+    key_evidence: list[str] = Field(default_factory=list)
+    risk_factors: list[str] = Field(default_factory=list)
+    invalidation_conditions: list[str] = Field(default_factory=list)
+    important_levels: list[str] = Field(default_factory=list)
+    data_freshness: str | None = None
+    tool_status: EvidenceToolStatus = EvidenceToolStatus.ok
+    degraded_reason: str | None = None
+    evidence_refs: list[str] = Field(default_factory=list)
+
+
+class EvidencePackage(BaseModel):
+    symbol: str = "XAUUSD"
+    reference_time: datetime
+    data_timestamp: datetime
+    data_source: str | None = None
+    summary: str | None = None
+    items: list[EvidencePackageItem]
+    notes: list[str] = Field(default_factory=list)
+
+
+class DebateCase(BaseModel):
+    side: DebateSide
+    thesis: str
+    evidence_item_refs: list[str] = Field(default_factory=list)
+    entry_zone: str
+    stop_loss_or_invalidation: str
+    target_zone: str
+    risk_reward: float | None = Field(default=None, ge=0)
+    weakness_acknowledged: list[str] = Field(default_factory=list)
+    supporting_arguments: list[str] = Field(default_factory=list)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    notes: list[str] = Field(default_factory=list)
+
+
+class DebateRebuttal(BaseModel):
+    side: DebateSide
+    responds_to_side: DebateSide
+    rebutted_points: list[str] = Field(default_factory=list)
+    accepted_points: list[str] = Field(default_factory=list)
+    plan_adjustments: list[str] = Field(default_factory=list)
+    confidence_trend: Literal["up", "down", "flat"] = "flat"
+    confidence_change: float | None = None
+    evidence_item_refs: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class FinalDebatePosition(BaseModel):
+    side: DebateSide
+    stance: DebateStance
+    confidence: float = Field(ge=0, le=1)
+    confidence_change: float | None = None
+    adopted_arguments: list[str] = Field(default_factory=list)
+    rejected_arguments: list[str] = Field(default_factory=list)
+    plan_adjustments: list[str] = Field(default_factory=list)
+    abandon_conditions: list[str] = Field(default_factory=list)
+    evidence_item_refs: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class LongPlan(BaseModel):
+    entry_zone: str
+    stop_loss: str | None = None
+    invalidation_level: str | None = None
+    target_zone: str
+    risk_reward: float | None = Field(default=None, ge=0)
+    conditions_to_enter: list[str] = Field(default_factory=list)
+    conditions_to_abort: list[str] = Field(default_factory=list)
+    evidence_item_refs: list[str] = Field(default_factory=list)
+
+
+class ShortPlan(BaseModel):
+    entry_zone: str
+    stop_loss: str | None = None
+    invalidation_level: str | None = None
+    target_zone: str
+    risk_reward: float | None = Field(default=None, ge=0)
+    conditions_to_enter: list[str] = Field(default_factory=list)
+    conditions_to_abort: list[str] = Field(default_factory=list)
+    evidence_item_refs: list[str] = Field(default_factory=list)
+
+
+class RangePlan(BaseModel):
+    upper_sell_zone: str
+    lower_buy_zone: str
+    upper_stop: str
+    lower_stop: str
+    midline_target: str
+    breakout_confirmation_level: str
+    breakdown_confirmation_level: str
+    range_invalidated_if: str
+    risk_reward: float | None = Field(default=None, ge=0)
+    conditions_to_enter: list[str] = Field(default_factory=list)
+    conditions_to_abort: list[str] = Field(default_factory=list)
+    evidence_item_refs: list[str] = Field(default_factory=list)
+
+
+class CommitteeDecision(BaseModel):
+    evidence_package: EvidencePackage
+    bull_opening_case: DebateCase
+    bear_opening_case: DebateCase
+    bull_rebuttal: DebateRebuttal
+    bear_rebuttal: DebateRebuttal
+    bull_final_position: FinalDebatePosition
+    bear_final_position: FinalDebatePosition
+    final_bias: FinalBias
+    actionability: Actionability
+    winning_side: DebateSide | Literal["none"] | None = None
+    adopted_arguments: list[str] = Field(default_factory=list)
+    rejected_arguments: list[str] = Field(default_factory=list)
+    long_plan: LongPlan | None = None
+    short_plan: ShortPlan | None = None
+    range_plan: RangePlan | None = None
+    wait_conditions: list[str] = Field(default_factory=list)
+    confidence_score: float = Field(ge=0, le=1)
+    decision_summary: str
+    risk_notes: list[str] = Field(default_factory=list)
+    evidence_item_refs: list[str] = Field(default_factory=list)
+
+
+class DecisionValidationResult(BaseModel):
+    is_valid: bool
+    checked_at: datetime
+    summary: str | None = None
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    validation_rules: list[str] = Field(default_factory=list)
+
+
+ValidationResult = DecisionValidationResult
+
+
+class PromptVersionMetadata(BaseModel):
+    prompt_key: str
+    version: str
+    prompt_type: str
+    agent_name: str | None = None
+    node_name: str | None = None
+    model_family: str | None = None
+    is_active: bool | None = None
+    rendered_variable_names: list[str] = Field(default_factory=list)
+    output_schema_ref: str | None = None
+
+
+class FinalForecast(ForecastResult):
+    bull_opening_case: DebateCase | None = None
+    bear_opening_case: DebateCase | None = None
+    bull_rebuttal: DebateRebuttal | None = None
+    bear_rebuttal: DebateRebuttal | None = None
+    bull_final_position: FinalDebatePosition | None = None
+    bear_final_position: FinalDebatePosition | None = None
+    final_bias: FinalBias
+    actionability: Actionability
+    evidence_package: EvidencePackage | None = None
+    committee_decision: CommitteeDecision | None = None
+    validation_status: DecisionValidationResult | None = None
+    prompt_versions: list[PromptVersionMetadata] = Field(default_factory=list)
+
+
 class ForecastEvaluationResult(BaseModel):
     id: int | None = None
     forecast_id: int
@@ -144,7 +341,7 @@ class SchedulerRunStatus(BaseModel):
 
 
 class ForecastHistoryItem(BaseModel):
-    forecast: ForecastResult
+    forecast: FinalForecast | ForecastResult
     evaluation: ForecastEvaluationResult | None = None
     trading_day: date | None = None
 
@@ -156,5 +353,5 @@ class ResearchRunResult(BaseModel):
     completed_at: datetime | None = None
     input_summary: dict[str, Any] = Field(default_factory=dict)
     error_message: str | None = None
-    forecast: ForecastResult | None = None
+    forecast: FinalForecast | ForecastResult | None = None
     evaluation: ForecastEvaluationResult | None = None

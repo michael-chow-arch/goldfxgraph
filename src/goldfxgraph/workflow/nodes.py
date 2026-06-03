@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import operator
+import re
 from datetime import UTC, date, datetime
-from typing import Any, Protocol, TypedDict
+from typing import Annotated, Any, Literal, Protocol, TypedDict, TypeVar
 
 import httpx
 from pydantic import BaseModel, Field
@@ -27,22 +30,41 @@ from goldfxgraph.market_data.pizza_index import PizzaIndexError, fetch_pizza_ind
 from goldfxgraph.market_data.polymarket import PolymarketError, fetch_polymarket_inputs
 from goldfxgraph.market_data.tradingview_quote import DEFAULT_TRADINGVIEW_SOURCE
 from goldfxgraph.packages.common.settings import GoldFXGraphSettings, get_settings
+from goldfxgraph.persistence.prompt_registry import PromptTemplateService, RenderedPrompt
 from goldfxgraph.persistence.repositories import ForecastRepository
 from goldfxgraph.schemas.forecast import (
+    Actionability,
     AgentVote,
+    CommitteeDecision,
     CurrentQuote,
     DailyBar,
+    DebateCase,
+    DebateRebuttal,
+    DebateSide,
+    DebateStance,
+    DecisionValidationResult,
+    EvidencePackage,
+    EvidencePackageItem,
+    EvidenceToolStatus,
+    FinalBias,
+    FinalDebatePosition,
+    FinalForecast,
     ForecastDirection,
     ForecastEvaluationResult,
     ForecastResult,
     ForecastWindowDirection,
+    LongPlan,
     MarketDataSet,
+    PromptVersionMetadata,
+    RangePlan,
+    ShortPlan,
     TechnicalIndicators,
 )
 
 logger = logging.getLogger(__name__)
 
 run_eod_backfill = None
+TCommitteeModel = TypeVar("TCommitteeModel", bound=BaseModel)
 
 
 class QuoteProvider(Protocol):
@@ -85,6 +107,21 @@ class WorkflowState(TypedDict, total=False):
     alt_data_votes: list[AgentVote]
     unavailable_signals: list[str]
     forecast_evaluation: ForecastEvaluationResult
+    evidence_package: EvidencePackage
+    bull_opening_case: DebateCase
+    bear_opening_case: DebateCase
+    bull_rebuttal: DebateRebuttal
+    bear_rebuttal: DebateRebuttal
+    bull_final_position: FinalDebatePosition
+    bear_final_position: FinalDebatePosition
+    committee_decision: CommitteeDecision
+    validation_status: DecisionValidationResult
+    validation_errors: list[str]
+    validation_warnings: list[str]
+    committee_validation_attempts: int
+    committee_repair_attempts: int
+    final_forecast: FinalForecast
+    prompt_versions: Annotated[list[PromptVersionMetadata], operator.add]
     forecast: ForecastResult
     run_id: int
     persistence_status: str
@@ -216,11 +253,11 @@ async def tool_load_forecast_feedback_history(state: WorkflowState) -> WorkflowS
     _schedule_scheduler_status_update(state, current_stage="tool_load_forecast_feedback_history")
     repository = state.get("repository")
     if repository is None:
-        return {**state, "forecast_feedback_history": []}
+        return {"forecast_feedback_history": []}
 
     limit = int(state.get("feedback_history_limit") or 5)
     history = await repository.get_latest_evaluation_summary(limit=limit)
-    return {**state, "forecast_feedback_history": history}
+    return {"forecast_feedback_history": history}
 
 
 def tool_fetch_market_sentiment_inputs(state: WorkflowState) -> WorkflowState:
@@ -358,7 +395,6 @@ def tool_fetch_newsflow_inputs(state: WorkflowState) -> WorkflowState:
         unavailable_signals.append("newsflow")
     unavailable_signals = _unique_strings([str(item) for item in unavailable_signals])
     return {
-        **state,
         "newsflow_inputs": newsflow_inputs,
         "unavailable_signals": unavailable_signals,
     }
@@ -392,7 +428,6 @@ def tool_fetch_pizza_index_inputs(state: WorkflowState) -> WorkflowState:
         unavailable_signals.append("pizza_index")
     unavailable_signals = _unique_strings([str(item) for item in unavailable_signals])
     return {
-        **state,
         "pizza_index_inputs": pizza_index_inputs,
         "unavailable_signals": unavailable_signals,
     }
@@ -423,7 +458,6 @@ def tool_fetch_polymarket_inputs(state: WorkflowState) -> WorkflowState:
         unavailable_signals.append("polymarket")
     unavailable_signals = _unique_strings([str(item) for item in unavailable_signals])
     return {
-        **state,
         "polymarket_inputs": polymarket_inputs,
         "unavailable_signals": unavailable_signals,
     }
@@ -441,14 +475,18 @@ def agent_market_sentiment_analysis(state: WorkflowState) -> WorkflowState:
         "market_sentiment",
         "agent_market_sentiment_analysis",
     )
-    state = _append_agent_diagnostic(state, diagnostic_record)
-    fallback_summary = _market_sentiment_summary(inputs)
-    summary = _summary_or_fallback(remote.summary if remote else None, fallback_summary)
+    diagnostics = _append_agent_diagnostic(state, diagnostic_record)
     polymarket_summary = str(inputs.get("polymarket_summary") or "").strip()
-    if "Polymarket" not in summary and polymarket_summary:
-        summary = _append_summary_section(summary, "重点·Polymarket", polymarket_summary)
-    direction = remote.direction if remote else _market_sentiment_direction(inputs)
-    confidence = remote.confidence if remote else _market_sentiment_confidence(inputs, direction)
+    if remote is None:
+        summary = _failure_summary("market_sentiment", diagnostic_record.get("message") if diagnostic_record else None)
+        direction = ForecastDirection.neutral
+        confidence = 0.0
+    else:
+        summary = remote.summary
+        if "Polymarket" not in summary and polymarket_summary:
+            summary = _append_summary_section(summary, "重点·Polymarket", polymarket_summary)
+        direction = remote.direction
+        confidence = remote.confidence
     vote = AgentVote(
         agent="market_sentiment",
         direction=direction,
@@ -456,7 +494,7 @@ def agent_market_sentiment_analysis(state: WorkflowState) -> WorkflowState:
         rationale=summary,
     )
     return {
-        **state,
+        "agent_diagnostics": diagnostics,
         "market_sentiment_summary": summary,
         "market_sentiment_votes": [vote],
         "agent_votes": [*_existing_votes_without(state, "market_sentiment"), vote],
@@ -469,12 +507,16 @@ def agent_alt_data_analysis(state: WorkflowState) -> WorkflowState:
         current_stage="agent_alt_data_analysis",
         active_agent="alt_data",
     )
-    inputs = state.get("alt_data_inputs", {})
     remote, _diagnostic, diagnostic_record = _remote_agent_response(state, "alt_data", "agent_alt_data_analysis")
-    state = _append_agent_diagnostic(state, diagnostic_record)
-    summary = _summary_or_fallback(remote.summary if remote else None, _alt_data_summary(inputs))
-    direction = remote.direction if remote else ForecastDirection.neutral
-    confidence = remote.confidence if remote else 0.3
+    diagnostics = _append_agent_diagnostic(state, diagnostic_record)
+    if remote is None:
+        summary = _failure_summary("alt_data", diagnostic_record.get("message") if diagnostic_record else None)
+        direction = ForecastDirection.neutral
+        confidence = 0.0
+    else:
+        summary = remote.summary
+        direction = remote.direction
+        confidence = remote.confidence
     vote = AgentVote(
         agent="alt_data",
         direction=direction,
@@ -482,7 +524,7 @@ def agent_alt_data_analysis(state: WorkflowState) -> WorkflowState:
         rationale=summary,
     )
     return {
-        **state,
+        "agent_diagnostics": diagnostics,
         "alt_data_summary": summary,
         "alt_data_votes": [vote],
         "agent_votes": [*_existing_votes_without(state, "alt_data"), vote],
@@ -701,19 +743,18 @@ def router_validate_request(state: WorkflowState) -> WorkflowState:
     _schedule_scheduler_status_update(state, current_stage="router_validate_request")
     if "errors" in state and state["errors"]:
         raise ValueError("; ".join(state["errors"]))
-    return state
+    return {}
 
 
 async def tool_load_market_data(state: WorkflowState) -> WorkflowState:
     _schedule_scheduler_status_update(state, current_stage="tool_load_market_data")
     if "market_data" in state and "latest_bar" in state and "bars" in state:
-        return state
+        return {}
 
     repository = state.get("repository")
     if repository is None:
         raise ValueError("workflow state missing repository for market data loading")
 
-    settings = state.get("settings") or get_settings()
     symbol = "XAUUSD"
     latest_bar = await repository.get_latest_market_bar(symbol)
     if latest_bar is None:
@@ -722,8 +763,6 @@ async def tool_load_market_data(state: WorkflowState) -> WorkflowState:
     bars = await repository.get_market_bars_between(symbol, date(1970, 1, 1), latest_bar.date)
     market_data = MarketDataSet(symbol=latest_bar.symbol, bars=bars, latest_bar=latest_bar)
     return {
-        **state,
-        "settings": settings,
         "market_data": market_data,
         "bars": bars,
         "latest_bar": latest_bar,
@@ -750,13 +789,13 @@ async def tool_ensure_market_data_freshness(state: WorkflowState) -> WorkflowSta
         raise MarketDataFreshnessError(
             f"market data freshness check failed: {result.failure_reason or 'unknown failure'}"
         )
-    return state
+    return {}
 
 
 def tool_fetch_current_gold_quote(state: WorkflowState) -> WorkflowState:
     _schedule_scheduler_status_update(state, current_stage="tool_fetch_current_gold_quote")
     if "quote" in state:
-        return state
+        return {}
 
     provider = state.get("quote_provider")
     if provider is None:
@@ -767,7 +806,7 @@ def tool_fetch_current_gold_quote(state: WorkflowState) -> WorkflowState:
 
     quote = provider.fetch()
     quote = _require_tradingview_quote(quote)
-    return {**state, "quote": quote}
+    return {"quote": quote}
 
 
 def _require_tradingview_quote(quote: CurrentQuote) -> CurrentQuote:
@@ -781,7 +820,7 @@ def _require_tradingview_quote(quote: CurrentQuote) -> CurrentQuote:
 def tool_compute_indicators(state: WorkflowState) -> WorkflowState:
     _schedule_scheduler_status_update(state, current_stage="tool_compute_indicators")
     if "indicators" in state:
-        return state
+        return {}
 
     bars = state.get("bars")
     if bars is None:
@@ -790,7 +829,7 @@ def tool_compute_indicators(state: WorkflowState) -> WorkflowState:
     if not bars:
         raise ValueError("workflow state missing daily bars for technical indicator calculation")
 
-    return {**state, "indicators": compute_technical_indicators(bars)}
+    return {"indicators": compute_technical_indicators(bars)}
 
 
 def tool_fetch_macro_inputs(state: WorkflowState) -> WorkflowState:
@@ -823,7 +862,6 @@ def tool_fetch_macro_inputs(state: WorkflowState) -> WorkflowState:
         "unavailable_signals": unavailable_signals,
     }
     return {
-        **state,
         "macro_inputs": inputs,
         "unavailable_signals": unavailable_signals,
     }
@@ -843,26 +881,29 @@ def agent_technical_analysis(state: WorkflowState) -> WorkflowState:
         "technical",
         "agent_technical_analysis",
     )
-    state = _append_agent_diagnostic(state, diagnostic_record)
-    direction = remote.direction if remote else _direction_from_inputs(quote.current_price, latest_bar, indicators)
+    diagnostics = _append_agent_diagnostic(state, diagnostic_record)
     atr = _usable_atr(indicators, latest_bar, quote.current_price)
-    summary = _summary_or_fallback(
-        remote.summary if remote else None,
-        _technical_summary(quote.current_price, latest_bar, indicators, direction, atr),
-    )
-    summary = _append_summary_section(
-        summary,
-        "技术分析·聪明钱",
-        _smart_money_summary(quote.current_price, latest_bar, indicators, direction, atr),
-    )
+    if remote is None:
+        summary = _failure_summary("technical", diagnostic_record.get("message") if diagnostic_record else None)
+        direction = ForecastDirection.neutral
+        confidence = 0.0
+    else:
+        direction = remote.direction
+        summary = remote.summary
+        summary = _append_summary_section(
+            summary,
+            "技术分析·聪明钱",
+            _smart_money_summary(quote.current_price, latest_bar, indicators, direction, atr),
+        )
+        confidence = remote.confidence
     vote = AgentVote(
         agent="technical",
         direction=direction,
-        confidence=remote.confidence if remote else _technical_confidence(indicators, direction),
+        confidence=confidence,
         rationale=summary,
     )
     return {
-        **state,
+        "agent_diagnostics": diagnostics,
         "technical_summary": summary,
         "agent_votes": [*_existing_votes_without(state, "technical"), vote],
     }
@@ -874,21 +915,24 @@ def agent_macro_analysis(state: WorkflowState) -> WorkflowState:
         current_stage="agent_macro_analysis",
         active_agent="macro",
     )
-    inputs = state.get("macro_inputs", {})
     remote, _diagnostic, diagnostic_record = _remote_agent_response(state, "macro", "agent_macro_analysis")
-    state = _append_agent_diagnostic(state, diagnostic_record)
-    summary = _summary_or_fallback(
-        remote.summary if remote else None,
-        _macro_summary(inputs),
-    )
+    diagnostics = _append_agent_diagnostic(state, diagnostic_record)
+    if remote is None:
+        summary = _failure_summary("macro", diagnostic_record.get("message") if diagnostic_record else None)
+        direction = ForecastDirection.neutral
+        confidence = 0.0
+    else:
+        summary = remote.summary
+        direction = remote.direction
+        confidence = remote.confidence
     vote = AgentVote(
         agent="macro",
-        direction=remote.direction if remote else ForecastDirection.neutral,
-        confidence=remote.confidence if remote else 0.35,
+        direction=direction,
+        confidence=confidence,
         rationale=summary,
     )
     return {
-        **state,
+        "agent_diagnostics": diagnostics,
         "macro_summary": summary,
         "agent_votes": [*_existing_votes_without(state, "macro"), vote],
     }
@@ -901,21 +945,28 @@ def agent_news_analysis(state: WorkflowState) -> WorkflowState:
         active_agent="news",
     )
     remote, _diagnostic, diagnostic_record = _remote_agent_response(state, "news", "agent_news_analysis")
-    state = _append_agent_diagnostic(state, diagnostic_record)
+    diagnostics = _append_agent_diagnostic(state, diagnostic_record)
     inputs = state.get("newsflow_inputs", {})
-    fallback_summary = _news_summary(inputs)
-    summary = _summary_or_fallback(remote.summary if remote else None, fallback_summary)
-    summary = _normalize_news_summary_representative_titles(summary, fallback_summary)
-    if "代表性标题" not in summary and fallback_summary:
-        summary = _append_summary_section(summary, "重点·参考新闻", fallback_summary)
+    reference_summary = _news_summary(inputs)
+    if remote is None:
+        summary = _failure_summary("news", diagnostic_record.get("message") if diagnostic_record else None)
+        direction = ForecastDirection.neutral
+        confidence = 0.0
+    else:
+        summary = remote.summary
+        summary = _normalize_news_summary_representative_titles(summary, reference_summary)
+        if "代表性标题" not in summary and reference_summary:
+            summary = _append_summary_section(summary, "重点·参考新闻", reference_summary)
+        direction = remote.direction
+        confidence = remote.confidence
     vote = AgentVote(
         agent="news",
-        direction=remote.direction if remote else ForecastDirection.neutral,
-        confidence=remote.confidence if remote else 0.35,
+        direction=direction,
+        confidence=confidence,
         rationale=summary,
     )
     return {
-        **state,
+        "agent_diagnostics": diagnostics,
         "news_summary": summary,
         "agent_votes": [*_existing_votes_without(state, "news"), vote],
     }
@@ -932,31 +983,1355 @@ def agent_risk_analysis(state: WorkflowState) -> WorkflowState:
     indicators = _required(state, "indicators")
     atr = _usable_atr(indicators, latest_bar, quote.current_price)
     remote, _diagnostic, diagnostic_record = _remote_agent_response(state, "risk", "agent_risk_analysis")
-    state = _append_agent_diagnostic(state, diagnostic_record)
+    diagnostics = _append_agent_diagnostic(state, diagnostic_record)
     notes = _merge_notes(
         state.get("risk_notes"),
         remote.risk_notes if remote and remote.risk_notes else _risk_notes(latest_bar, indicators, atr),
     )
-    summary = (
-        remote.summary if remote else "风险 agent 基于 ATR、日线区间与指标缺失情况生成结构化提示，不触发任何交易执行。"
-    )
+    if remote is None:
+        summary = _failure_summary("risk", diagnostic_record.get("message") if diagnostic_record else None)
+        direction = ForecastDirection.neutral
+        confidence = 0.0
+    else:
+        summary = remote.summary
+        direction = remote.direction
+        confidence = remote.confidence
     vote = AgentVote(
         agent="risk",
-        direction=remote.direction
-        if remote
-        else _risk_vote_direction(
-            _direction_from_inputs(quote.current_price, latest_bar, indicators),
-            atr,
-            quote.current_price,
-        ),
-        confidence=remote.confidence if remote else 0.55,
+        direction=direction,
+        confidence=confidence,
         rationale=summary,
     )
     return {
-        **state,
+        "agent_diagnostics": diagnostics,
         "risk_summary": summary,
         "risk_notes": notes,
         "agent_votes": [*_existing_votes_without(state, "risk"), vote],
+    }
+
+
+def _committee_vote(state: WorkflowState, agent_name: str) -> AgentVote | None:
+    for vote in reversed(state.get("agent_votes") or []):
+        if vote.agent == agent_name:
+            return vote
+    return None
+
+
+def _committee_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return cleaned or None
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, dict):
+        for key in ("summary", "note", "sentiment", "label", "value"):
+            raw_value = value.get(key)
+            if raw_value not in (None, ""):
+                return str(raw_value)
+    return str(value)
+
+
+def _committee_source_status(source_block: object) -> EvidenceToolStatus:
+    if not isinstance(source_block, dict):
+        return EvidenceToolStatus.unavailable
+    status = str(source_block.get("status") or "").strip().lower()
+    if not status:
+        available_signals = source_block.get("available_signals")
+        if isinstance(available_signals, list) and available_signals:
+            return EvidenceToolStatus.ok
+        return EvidenceToolStatus.unavailable
+    if status == "available":
+        unavailable_signals = source_block.get("unavailable_signals")
+        if isinstance(unavailable_signals, list) and unavailable_signals:
+            return EvidenceToolStatus.degraded
+        return EvidenceToolStatus.ok
+    if status == "degraded":
+        return EvidenceToolStatus.degraded
+    return EvidenceToolStatus.unavailable
+
+
+def _committee_source_degraded_reason(source_block: object, source_label: str) -> str | None:
+    if not isinstance(source_block, dict):
+        return f"{source_label} 输入缺失。"
+
+    reasons: list[str] = []
+    status = str(source_block.get("status") or "").strip().lower()
+    if status and status != "available":
+        reasons.append(f"{source_label} status={status}")
+    unavailable_signals = source_block.get("unavailable_signals")
+    if isinstance(unavailable_signals, list) and unavailable_signals:
+        reasons.append(f"{source_label} unavailable={', '.join(str(item) for item in unavailable_signals)}")
+    if not reasons:
+        return None
+    return "；".join(reasons)
+
+
+def _committee_data_freshness_label(latest_bar: DailyBar, quote: CurrentQuote) -> str:
+    return f"quote={quote.data_timestamp.isoformat()}; bar_date={latest_bar.date.isoformat()}"
+
+
+def _committee_indicators_degraded_reason(indicators: TechnicalIndicators) -> str | None:
+    if not indicators.unavailable:
+        return None
+    unavailable = ", ".join(sorted(indicators.unavailable))
+    return f"技术指标缺失：{unavailable}"
+
+
+def _committee_evidence_package_summary(state: WorkflowState) -> str:
+    latest_bar = _required(state, "latest_bar")
+    quote = _required(state, "quote")
+    return (
+        f"围绕 XAUUSD 的两轮对抗式交易委员会证据包。最新报价 {quote.current_price:.2f}，"
+        f"最新完成日线 {latest_bar.date.isoformat()}，仅汇总 specialist analyses 的结构化证据。"
+    )
+
+
+def _risk_note_snippets(notes: list[str] | None, *, limit: int = 3) -> list[str]:
+    snippets: list[str] = []
+    for note in notes or []:
+        cleaned = str(note).strip()
+        if cleaned and cleaned not in snippets:
+            snippets.append(cleaned)
+        if len(snippets) >= limit:
+            break
+    return snippets
+
+
+def _macro_evidence_snippets(macro_inputs: object) -> list[str]:
+    if not isinstance(macro_inputs, dict):
+        return []
+    snippets: list[str] = []
+    dollar_index = macro_inputs.get("dollar_index")
+    real_rates = macro_inputs.get("real_rates")
+    if isinstance(dollar_index, dict):
+        text = _committee_text(dollar_index)
+        if text:
+            snippets.append(f"美元指数：{text}")
+    if isinstance(real_rates, dict):
+        text = _committee_text(real_rates)
+        if text:
+            snippets.append(f"实际利率：{text}")
+    return snippets
+
+
+def _macro_important_levels(macro_inputs: object) -> list[str]:
+    if not isinstance(macro_inputs, dict):
+        return []
+    levels: list[str] = []
+    dollar_index = macro_inputs.get("dollar_index")
+    real_rates = macro_inputs.get("real_rates")
+    if isinstance(dollar_index, dict):
+        text = _committee_text(dollar_index.get("value"))
+        if text:
+            levels.append(f"美元指数 {text}")
+    if isinstance(real_rates, dict):
+        text = _committee_text(real_rates.get("value"))
+        if text:
+            levels.append(f"实际利率 {text}")
+    return levels
+
+
+def _news_evidence_snippets(newsflow_inputs: object) -> list[str]:
+    if not isinstance(newsflow_inputs, dict):
+        return []
+    snippets: list[str] = []
+    summary = _committee_text(newsflow_inputs.get("summary"))
+    if summary:
+        snippets.append(summary)
+    top_headlines = newsflow_inputs.get("top_headlines")
+    if isinstance(top_headlines, list):
+        for item in top_headlines[:3]:
+            if not isinstance(item, dict):
+                continue
+            title = _committee_text(item.get("title_cn") or item.get("title"))
+            source = _committee_text(item.get("source_cn") or item.get("source"))
+            if title and source:
+                snippets.append(f"{source}：{title}")
+            elif title:
+                snippets.append(title)
+    return snippets
+
+
+def _news_important_levels(newsflow_inputs: object) -> list[str]:
+    if not isinstance(newsflow_inputs, dict):
+        return []
+    levels: list[str] = []
+    sentiment = _committee_text(newsflow_inputs.get("sentiment"))
+    if sentiment:
+        levels.append(f"newsflow sentiment={sentiment}")
+    headline_count = newsflow_inputs.get("headline_count")
+    if headline_count is not None:
+        levels.append(f"headline_count={headline_count}")
+    return levels
+
+
+def _market_sentiment_evidence_snippets(market_sentiment_inputs: object) -> list[str]:
+    if not isinstance(market_sentiment_inputs, dict):
+        return []
+    snippets: list[str] = []
+    feedback_history = market_sentiment_inputs.get("feedback_history")
+    if isinstance(feedback_history, list):
+        for item in feedback_history[:3]:
+            text = _committee_text(item)
+            if text:
+                snippets.append(f"反馈历史：{text}")
+    cftc_commitments = market_sentiment_inputs.get("cftc_commitments")
+    if isinstance(cftc_commitments, dict):
+        text = _committee_text(cftc_commitments)
+        if text:
+            snippets.append(f"CFTC：{text}")
+    polymarket_summary = _committee_text(market_sentiment_inputs.get("polymarket_summary"))
+    if polymarket_summary:
+        snippets.append(f"Polymarket：{polymarket_summary}")
+    return snippets
+
+
+def _market_sentiment_important_levels(market_sentiment_inputs: object) -> list[str]:
+    if not isinstance(market_sentiment_inputs, dict):
+        return []
+    levels: list[str] = []
+    count = market_sentiment_inputs.get("feedback_signal_count")
+    if count is not None:
+        levels.append(f"feedback_signal_count={count}")
+    bullish_count = market_sentiment_inputs.get("polymarket_bullish_count")
+    bearish_count = market_sentiment_inputs.get("polymarket_bearish_count")
+    if bullish_count is not None or bearish_count is not None:
+        levels.append(
+            f"Polymarket bullish={bullish_count or 0}, bearish={bearish_count or 0}"
+        )
+    return levels
+
+
+def _alt_data_evidence_snippets(alt_data_inputs: object) -> list[str]:
+    if not isinstance(alt_data_inputs, dict):
+        return []
+    snippets: list[str] = []
+    pizza_index = alt_data_inputs.get("pizza_index")
+    dollar_index = alt_data_inputs.get("dollar_index")
+    real_rates = alt_data_inputs.get("real_rates")
+    if isinstance(pizza_index, dict):
+        text = _committee_text(pizza_index)
+        if text:
+            snippets.append(f"Pizza Index：{text}")
+    if isinstance(dollar_index, dict):
+        text = _committee_text(dollar_index)
+        if text:
+            snippets.append(f"美元指数：{text}")
+    if isinstance(real_rates, dict):
+        text = _committee_text(real_rates)
+        if text:
+            snippets.append(f"实际利率：{text}")
+    return snippets
+
+
+def _alt_data_important_levels(alt_data_inputs: object) -> list[str]:
+    if not isinstance(alt_data_inputs, dict):
+        return []
+    levels: list[str] = []
+    price_context = alt_data_inputs.get("price_context")
+    if isinstance(price_context, dict):
+        current_price = _committee_text(price_context.get("current_price"))
+        latest_close = _committee_text(price_context.get("latest_close"))
+        if current_price:
+            levels.append(f"current_price={current_price}")
+        if latest_close:
+            levels.append(f"latest_close={latest_close}")
+    return levels
+
+
+def _committee_source_risk_factors(source_block: object, source_label: str) -> list[str]:
+    if not isinstance(source_block, dict):
+        return [f"{source_label} 输入缺失。"]
+
+    factors: list[str] = []
+    unavailable_signals = source_block.get("unavailable_signals")
+    if isinstance(unavailable_signals, list):
+        for signal in unavailable_signals:
+            text = _committee_text(signal)
+            if text:
+                factors.append(f"{source_label} unavailable={text}")
+
+    status = str(source_block.get("status") or "").strip().lower()
+    if status and status != "available":
+        factors.append(f"{source_label} status={status}")
+    return factors
+
+
+def _committee_tool_status(source_block: object, source_label: str) -> EvidenceToolStatus:
+    status = _committee_source_status(source_block)
+    if status != EvidenceToolStatus.ok:
+        return status
+    if _committee_source_degraded_reason(source_block, source_label):
+        return EvidenceToolStatus.degraded
+    return EvidenceToolStatus.ok
+
+
+def _build_committee_evidence_item(
+    *,
+    item_id: str,
+    specialist_name: str,
+    category: str,
+    vote: AgentVote | None,
+    default_confidence: float,
+    key_evidence: list[str],
+    risk_factors: list[str],
+    invalidation_conditions: list[str],
+    important_levels: list[str],
+    data_freshness: str,
+    tool_status: EvidenceToolStatus,
+    degraded_reason: str | None,
+    evidence_refs: list[str],
+) -> EvidencePackageItem:
+    signal = vote.direction.value if vote is not None else ForecastDirection.neutral.value
+    confidence = vote.confidence if vote is not None else default_confidence
+    return EvidencePackageItem(
+        item_id=item_id,
+        specialist_name=specialist_name,
+        category=category,
+        signal=signal,
+        confidence=round(confidence, 2),
+        key_evidence=[snippet for snippet in key_evidence if snippet],
+        risk_factors=[snippet for snippet in risk_factors if snippet],
+        invalidation_conditions=[snippet for snippet in invalidation_conditions if snippet],
+        important_levels=[snippet for snippet in important_levels if snippet],
+        data_freshness=data_freshness,
+        tool_status=tool_status,
+        degraded_reason=degraded_reason,
+        evidence_refs=[snippet for snippet in evidence_refs if snippet],
+    )
+
+
+def node_build_evidence_package(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(state, current_stage="node_build_evidence_package")
+    latest_bar = _required(state, "latest_bar")
+    quote = _required(state, "quote")
+    indicators = _required(state, "indicators")
+    technical_summary = _required(state, "technical_summary")
+    macro_summary = _required(state, "macro_summary")
+    news_summary = _required(state, "news_summary")
+    market_sentiment_summary = _required(state, "market_sentiment_summary")
+    alt_data_summary = _required(state, "alt_data_summary")
+    risk_summary = _required(state, "risk_summary")
+
+    data_freshness = _committee_data_freshness_label(latest_bar, quote)
+    risk_notes = _risk_note_snippets(state.get("risk_notes"))
+    evidence_package = EvidencePackage(
+        symbol=quote.symbol or latest_bar.symbol,
+        reference_time=datetime.now(UTC),
+        data_timestamp=quote.data_timestamp,
+        data_source=quote.data_source,
+        summary=_committee_evidence_package_summary(state),
+        items=[
+            _build_committee_evidence_item(
+                item_id="technical",
+                specialist_name="technical",
+                category="price_action",
+                vote=_committee_vote(state, "technical"),
+                default_confidence=_technical_confidence(
+                    indicators,
+                    _direction_from_inputs(quote.current_price, latest_bar, indicators),
+                ),
+                key_evidence=[
+                    technical_summary,
+                    f"当前报价 {quote.current_price:.2f}",
+                    f"最新完成日线收盘 {latest_bar.close:.2f}",
+                ],
+                risk_factors=risk_notes,
+                invalidation_conditions=[
+                    f"收盘有效跌破 {latest_bar.low:.2f}",
+                    "技术均线结构重新转弱",
+                ],
+                important_levels=[
+                    f"日内高点 {latest_bar.high:.2f}",
+                    f"日内低点 {latest_bar.low:.2f}",
+                    f"报价 {quote.current_price:.2f}",
+                ],
+                data_freshness=data_freshness,
+                tool_status=EvidenceToolStatus.degraded if indicators.unavailable else EvidenceToolStatus.ok,
+                degraded_reason=_committee_indicators_degraded_reason(indicators),
+                evidence_refs=[
+                    "technical_summary",
+                    "quote.current_price",
+                    "latest_bar.close",
+                    "indicators.sma_20",
+                    "indicators.ema_12",
+                    "indicators.rsi_14",
+                    "indicators.atr_14",
+                ],
+            ),
+            _build_committee_evidence_item(
+                item_id="macro",
+                specialist_name="macro",
+                category="macro_regime",
+                vote=_committee_vote(state, "macro"),
+                default_confidence=0.35,
+                key_evidence=[macro_summary, *_macro_evidence_snippets(state.get("macro_inputs"))],
+                risk_factors=_committee_source_risk_factors(state.get("macro_inputs"), "macro"),
+                invalidation_conditions=[
+                    "美元指数与实际利率方向未能继续支持该宏观情景",
+                    "宏观输入恢复后与当前摘要结论相反",
+                ],
+                important_levels=_macro_important_levels(state.get("macro_inputs")),
+                data_freshness=data_freshness,
+                tool_status=_committee_tool_status(state.get("macro_inputs"), "macro"),
+                degraded_reason=_committee_source_degraded_reason(state.get("macro_inputs"), "macro"),
+                evidence_refs=[
+                    "macro_summary",
+                    "macro_inputs.dollar_index",
+                    "macro_inputs.real_rates",
+                ],
+            ),
+            _build_committee_evidence_item(
+                item_id="news",
+                specialist_name="news",
+                category="event_flow",
+                vote=_committee_vote(state, "news"),
+                default_confidence=0.35,
+                key_evidence=[news_summary, *_news_evidence_snippets(state.get("newsflow_inputs"))],
+                risk_factors=_committee_source_risk_factors(state.get("newsflow_inputs"), "newsflow"),
+                invalidation_conditions=[
+                    "可验证新闻流出现明确反向冲击",
+                    "后续新闻流与当前摘要结论出现持续背离",
+                ],
+                important_levels=_news_important_levels(state.get("newsflow_inputs")),
+                data_freshness=data_freshness,
+                tool_status=_committee_tool_status(state.get("newsflow_inputs"), "newsflow"),
+                degraded_reason=_committee_source_degraded_reason(state.get("newsflow_inputs"), "newsflow"),
+                evidence_refs=[
+                    "news_summary",
+                    "newsflow_inputs.top_headlines",
+                    "newsflow_inputs.sentiment",
+                ],
+            ),
+            _build_committee_evidence_item(
+                item_id="market_sentiment",
+                specialist_name="market_sentiment",
+                category="positioning_sentiment",
+                vote=_committee_vote(state, "market_sentiment"),
+                default_confidence=0.4,
+                key_evidence=[
+                    market_sentiment_summary,
+                    *_market_sentiment_evidence_snippets(state.get("market_sentiment_inputs")),
+                ],
+                risk_factors=_committee_source_risk_factors(
+                    state.get("market_sentiment_inputs"),
+                    "market_sentiment",
+                ),
+                invalidation_conditions=[
+                    "反馈历史与持仓/预测数据持续反向",
+                    "情绪数据恢复后明显推翻当前判断",
+                ],
+                important_levels=_market_sentiment_important_levels(state.get("market_sentiment_inputs")),
+                data_freshness=data_freshness,
+                tool_status=_committee_tool_status(
+                    state.get("market_sentiment_inputs"),
+                    "market_sentiment",
+                ),
+                degraded_reason=_committee_source_degraded_reason(
+                    state.get("market_sentiment_inputs"),
+                    "market_sentiment",
+                ),
+                evidence_refs=[
+                    "market_sentiment_summary",
+                    "forecast_feedback_history",
+                    "market_sentiment_inputs.cftc_commitments",
+                    "market_sentiment_inputs.polymarket_summary",
+                ],
+            ),
+            _build_committee_evidence_item(
+                item_id="alt_data",
+                specialist_name="alt_data",
+                category="alternative_data",
+                vote=_committee_vote(state, "alt_data"),
+                default_confidence=0.3,
+                key_evidence=[alt_data_summary, *_alt_data_evidence_snippets(state.get("alt_data_inputs"))],
+                risk_factors=_committee_source_risk_factors(state.get("alt_data_inputs"), "alt_data"),
+                invalidation_conditions=[
+                    "另类数据恢复后明显与当前摘要结论相反",
+                    "核心另类数据源全部恢复且指向反向",
+                ],
+                important_levels=_alt_data_important_levels(state.get("alt_data_inputs")),
+                data_freshness=data_freshness,
+                tool_status=_committee_tool_status(state.get("alt_data_inputs"), "alt_data"),
+                degraded_reason=_committee_source_degraded_reason(state.get("alt_data_inputs"), "alt_data"),
+                evidence_refs=[
+                    "alt_data_summary",
+                    "alt_data_inputs.pizza_index",
+                    "alt_data_inputs.dollar_index",
+                    "alt_data_inputs.real_rates",
+                ],
+            ),
+            _build_committee_evidence_item(
+                item_id="risk",
+                specialist_name="risk",
+                category="risk_control",
+                vote=_committee_vote(state, "risk"),
+                default_confidence=0.55,
+                key_evidence=[risk_summary, *_risk_note_snippets(state.get("risk_notes"))],
+                risk_factors=_risk_note_snippets(state.get("risk_notes")),
+                invalidation_conditions=[
+                    "波动放大到超出当前风险假设",
+                    "风险提示显示仓位/波动结构已失效",
+                ],
+                important_levels=[
+                    f"ATR 参考 {(_usable_atr(indicators, latest_bar, quote.current_price)):.2f}",
+                    f"日线波幅 {latest_bar.high - latest_bar.low:.2f}",
+                ],
+                data_freshness=data_freshness,
+                tool_status=EvidenceToolStatus.degraded if indicators.unavailable else EvidenceToolStatus.ok,
+                degraded_reason=_committee_indicators_degraded_reason(indicators),
+                evidence_refs=[
+                    "risk_summary",
+                    "risk_notes",
+                    "indicators.atr_14",
+                ],
+            ),
+        ],
+        notes=[
+            "证据包只汇总 specialist analysis 和工具输入，不包含 bull/bear/chair 观点。",
+            "后续委员会节点只能基于 evidence package 中可引用的事实发言。",
+            "若某项输入不可用，对应 item 会标记为 degraded 或 unavailable。",
+        ],
+    )
+
+    return {"evidence_package": evidence_package}
+
+
+COMMITTEE_PROMPT_KEYS: dict[str, tuple[str, str]] = {
+    "bull_opening_case": (
+        "trading_committee.bull_opening_case.system",
+        "trading_committee.bull_opening_case.user",
+    ),
+    "bear_opening_case": (
+        "trading_committee.bear_opening_case.system",
+        "trading_committee.bear_opening_case.user",
+    ),
+    "bull_rebuttal": (
+        "trading_committee.bull_rebuttal.system",
+        "trading_committee.bull_rebuttal.user",
+    ),
+    "bear_rebuttal": (
+        "trading_committee.bear_rebuttal.system",
+        "trading_committee.bear_rebuttal.user",
+    ),
+    "bull_final_position": (
+        "trading_committee.bull_final_position.system",
+        "trading_committee.bull_final_position.user",
+    ),
+    "bear_final_position": (
+        "trading_committee.bear_final_position.system",
+        "trading_committee.bear_final_position.user",
+    ),
+    "chair": (
+        "trading_committee.chair.system",
+        "trading_committee.chair.user",
+    ),
+    "repair": (
+        "trading_committee.repair.system",
+        "trading_committee.repair.user",
+    ),
+}
+
+
+def _json_block(value: object) -> str:
+    if isinstance(value, BaseModel):
+        value = value.model_dump(mode="json")
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2, default=str)
+
+
+def _append_committee_prompt_versions(
+    state: WorkflowState,
+    rendered_prompts: list[RenderedPrompt],
+) -> list[PromptVersionMetadata]:
+    prompt_versions = list(state.get("prompt_versions") or [])
+    for rendered_prompt in rendered_prompts:
+        prompt_versions.append(
+            PromptVersionMetadata(
+                prompt_key=rendered_prompt.prompt_key,
+                version=rendered_prompt.version,
+                prompt_type=rendered_prompt.prompt_type,
+                agent_name=rendered_prompt.agent_name,
+                node_name=rendered_prompt.node_name,
+                model_family=rendered_prompt.model_family,
+                is_active=rendered_prompt.is_active,
+                rendered_variable_names=list(rendered_prompt.rendered_variable_names),
+                output_schema_ref=rendered_prompt.output_schema_ref,
+            )
+        )
+    return prompt_versions
+
+
+def _committee_prompt_variables(state: WorkflowState, role: str) -> dict[str, str]:
+    evidence_package = _required(state, "evidence_package")
+    if role in {"bull_opening_case", "bear_opening_case"}:
+        return {"evidence_package": _json_block(evidence_package)}
+    if role in {"bull_rebuttal", "bear_rebuttal"}:
+        opening_cases = {
+            "bull_opening_case": state.get("bull_opening_case"),
+            "bear_opening_case": state.get("bear_opening_case"),
+        }
+        return {
+            "opening_cases": _json_block(opening_cases),
+            "evidence_package": _json_block(evidence_package),
+        }
+    if role in {"bull_final_position", "bear_final_position"}:
+        opening_case_key = "bull_opening_case" if role.startswith("bull") else "bear_opening_case"
+        rebuttal_key = "bull_rebuttal" if role.startswith("bull") else "bear_rebuttal"
+        return {
+            "opening_case": _json_block(state.get(opening_case_key)),
+            "rebuttal": _json_block(state.get(rebuttal_key)),
+            "evidence_package": _json_block(evidence_package),
+        }
+    if role == "chair":
+        return {
+            "evidence_package": _json_block(evidence_package),
+            "opening_cases": _json_block(
+                {
+                    "bull_opening_case": state.get("bull_opening_case"),
+                    "bear_opening_case": state.get("bear_opening_case"),
+                }
+            ),
+            "rebuttals": _json_block(
+                {
+                    "bull_rebuttal": state.get("bull_rebuttal"),
+                    "bear_rebuttal": state.get("bear_rebuttal"),
+                }
+            ),
+            "final_positions": _json_block(
+                {
+                    "bull_final_position": state.get("bull_final_position"),
+                    "bear_final_position": state.get("bear_final_position"),
+                }
+            ),
+        }
+    if role == "repair":
+        return {
+            "validation_errors": _json_block(state.get("validation_errors") or []),
+            "committee_decision": _json_block(state.get("committee_decision")),
+            "evidence_package": _json_block(evidence_package),
+        }
+    raise ValueError(f"unsupported committee role: {role}")
+
+
+async def _record_committee_prompt_versions(
+    state: WorkflowState,
+    role: str,
+) -> list[PromptVersionMetadata]:
+    repository = state.get("repository")
+    if repository is None:
+        return list(state.get("prompt_versions") or [])
+    system_key, user_key = COMMITTEE_PROMPT_KEYS[role]
+    service = PromptTemplateService(repository._session_factory)  # type: ignore[attr-defined]
+    variables = _committee_prompt_variables(state, role)
+    rendered_system = await service.render_prompt(system_key, variables)
+    rendered_user = await service.render_prompt(user_key, variables)
+    return _append_committee_prompt_versions(state, [rendered_system, rendered_user])
+
+
+def _committee_supporting_items(evidence_package: EvidencePackage, side: DebateSide) -> list[EvidencePackageItem]:
+    supported_signals = {"bullish", "neutral"} if side == DebateSide.bull else {"bearish", "neutral"}
+    return [item for item in evidence_package.items if item.signal in supported_signals]
+
+
+def _committee_opposing_items(evidence_package: EvidencePackage, side: DebateSide) -> list[EvidencePackageItem]:
+    opposing_signal = "bearish" if side == DebateSide.bull else "bullish"
+    return [item for item in evidence_package.items if item.signal == opposing_signal]
+
+
+def _committee_item_snippets(items: list[EvidencePackageItem], *, limit: int = 3) -> list[str]:
+    snippets: list[str] = []
+    for item in items:
+        for source in [item.key_evidence, item.risk_factors, item.important_levels]:
+            for text in source:
+                cleaned = str(text).strip()
+                if cleaned and cleaned not in snippets:
+                    snippets.append(cleaned)
+                if len(snippets) >= limit:
+                    return snippets
+    return snippets
+
+
+def _committee_average_confidence(items: list[EvidencePackageItem], *, default: float) -> float:
+    if not items:
+        return default
+    average = sum(item.confidence for item in items) / len(items)
+    return round(min(max(average, 0.0), 1.0), 2)
+
+
+def _committee_price_context(state: WorkflowState) -> tuple[DailyBar, CurrentQuote, TechnicalIndicators, float]:
+    latest_bar = _required(state, "latest_bar")
+    quote = _required(state, "quote")
+    indicators = _required(state, "indicators")
+    atr = _usable_atr(indicators, latest_bar, quote.current_price)
+    return latest_bar, quote, indicators, atr
+
+
+def _build_opening_case(state: WorkflowState, side: DebateSide) -> DebateCase:
+    evidence_package = _required(state, "evidence_package")
+    latest_bar, quote, indicators, atr = _committee_price_context(state)
+    supporting_items = _committee_supporting_items(evidence_package, side)
+    opposing_items = _committee_opposing_items(evidence_package, side)
+    side_label = "看多" if side == DebateSide.bull else "看空"
+    thesis = (
+        f"{side_label}开场：根据证据包中最相关的结构化信号，"
+        f"当前更适合以{side_label}视角解读 XAUUSD。"
+    )
+    if supporting_items:
+        thesis = f"{side_label}开场：{_committee_item_snippets(supporting_items, limit=1)[0]}。"
+    if side == DebateSide.bull:
+        entry_zone = (
+            f"{max(quote.current_price - atr * 0.25, latest_bar.low):.2f}-"
+            f"{quote.current_price + atr * 0.25:.2f}"
+        )
+        stop_loss_or_invalidation = f"跌破 {max(latest_bar.low, quote.current_price - atr):.2f}"
+        target_zone = (
+            f"{quote.current_price + atr * 1.5:.2f}-{quote.current_price + atr * 2.0:.2f}"
+        )
+    else:
+        entry_zone = (
+            f"{quote.current_price - atr * 0.25:.2f}-"
+            f"{min(quote.current_price + atr * 0.25, latest_bar.high):.2f}"
+        )
+        stop_loss_or_invalidation = f"上破 {min(latest_bar.high, quote.current_price + atr):.2f}"
+        target_zone = (
+            f"{quote.current_price - atr * 2.0:.2f}-{quote.current_price - atr * 1.5:.2f}"
+        )
+    risk_reward = round(2.0, 2)
+    confidence = _committee_average_confidence(supporting_items, default=0.45)
+    if side == DebateSide.bull and quote.current_price >= latest_bar.close:
+        confidence = min(confidence + 0.05, 0.82)
+    if side == DebateSide.bear and quote.current_price <= latest_bar.close:
+        confidence = min(confidence + 0.05, 0.82)
+    weakness_acknowledged = _committee_item_snippets(opposing_items, limit=2) or [
+        "仍需承认反方证据包中的风险提示。",
+    ]
+    supporting_arguments = _committee_item_snippets(supporting_items, limit=3)
+    if not supporting_arguments:
+        supporting_arguments = [evidence_package.summary or "证据包没有提供额外文字摘要。"]
+    return DebateCase(
+        side=side,
+        thesis=thesis,
+        evidence_item_refs=[
+            item.item_id for item in supporting_items
+        ]
+        or [item.item_id for item in evidence_package.items[:2]],
+        entry_zone=entry_zone,
+        stop_loss_or_invalidation=stop_loss_or_invalidation,
+        target_zone=target_zone,
+        risk_reward=risk_reward,
+        weakness_acknowledged=weakness_acknowledged,
+        supporting_arguments=supporting_arguments,
+        confidence=confidence,
+        notes=[
+            "只允许引用 evidence package 中的事实。",
+            f"当前 ATR 参考值约 {atr:.2f}。",
+        ],
+    )
+
+
+async def agent_bull_opening_case(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(state, current_stage="agent_bull_opening_case")
+    prompt_versions = await _record_committee_prompt_versions(state, "bull_opening_case")
+    return {
+        "prompt_versions": prompt_versions,
+        "bull_opening_case": _build_opening_case(state, DebateSide.bull),
+    }
+
+
+async def agent_bear_opening_case(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(state, current_stage="agent_bear_opening_case")
+    prompt_versions = await _record_committee_prompt_versions(state, "bear_opening_case")
+    return {
+        "prompt_versions": prompt_versions,
+        "bear_opening_case": _build_opening_case(state, DebateSide.bear),
+    }
+
+
+def _build_rebuttal(state: WorkflowState, side: DebateSide) -> DebateRebuttal:
+    own_case = _required(state, "bull_opening_case" if side == DebateSide.bull else "bear_opening_case")
+    opposing_case = _required(state, "bear_opening_case" if side == DebateSide.bull else "bull_opening_case")
+    opposing_side = DebateSide.bear if side == DebateSide.bull else DebateSide.bull
+    own_confidence = own_case.confidence or 0.45
+    opposing_confidence = opposing_case.confidence or 0.45
+    confidence_delta = round(max(min(own_confidence - opposing_confidence, 0.1), -0.12), 2)
+    confidence_trend = "up" if confidence_delta > 0.03 else "down" if confidence_delta < -0.03 else "flat"
+    rebutted_points = list(opposing_case.supporting_arguments[:2])
+    if opposing_case.weakness_acknowledged:
+        rebutted_points.extend(opposing_case.weakness_acknowledged[:1])
+    if not rebutted_points:
+        rebutted_points = [f"对方 {opposing_side.value} 论点与证据包并未形成足够一致的结构。"]
+    accepted_points = list(opposing_case.weakness_acknowledged[:2])
+    if not accepted_points:
+        accepted_points = ["承认对方存在需要确认的风险边界。"]
+    plan_adjustments = list(own_case.supporting_arguments[:2])
+    if own_case.entry_zone not in plan_adjustments:
+        plan_adjustments.append(f"将入场聚焦于 {own_case.entry_zone} 附近的确认信号。")
+    return DebateRebuttal(
+        side=side,
+        responds_to_side=opposing_side,
+        rebutted_points=rebutted_points,
+        accepted_points=accepted_points,
+        plan_adjustments=plan_adjustments,
+        confidence_trend=confidence_trend,
+        confidence_change=confidence_delta,
+        evidence_item_refs=list(dict.fromkeys([*own_case.evidence_item_refs, *opposing_case.evidence_item_refs])),
+        notes=[
+            "必须逐点回应对方 opening case。",
+            "不得新增 evidence package 之外的市场事实。",
+        ],
+    )
+
+
+async def agent_bull_rebuttal(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(state, current_stage="agent_bull_rebuttal")
+    prompt_versions = await _record_committee_prompt_versions(state, "bull_rebuttal")
+    return {
+        "prompt_versions": prompt_versions,
+        "bull_rebuttal": _build_rebuttal(state, DebateSide.bull),
+    }
+
+
+async def agent_bear_rebuttal(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(state, current_stage="agent_bear_rebuttal")
+    prompt_versions = await _record_committee_prompt_versions(state, "bear_rebuttal")
+    return {
+        "prompt_versions": prompt_versions,
+        "bear_rebuttal": _build_rebuttal(state, DebateSide.bear),
+    }
+
+
+def _build_final_position(state: WorkflowState, side: DebateSide) -> FinalDebatePosition:
+    opening_case = _required(state, "bull_opening_case" if side == DebateSide.bull else "bear_opening_case")
+    rebuttal = _required(state, "bull_rebuttal" if side == DebateSide.bull else "bear_rebuttal")
+    opposing_case = _required(state, "bear_opening_case" if side == DebateSide.bull else "bull_opening_case")
+    base_confidence = opening_case.confidence or 0.45
+    if rebuttal.confidence_change is not None:
+        base_confidence = min(max(base_confidence + (rebuttal.confidence_change / 2), 0.0), 1.0)
+    if len(opening_case.supporting_arguments) >= len(opposing_case.supporting_arguments):
+        base_confidence = min(base_confidence + 0.03, 1.0)
+    if len(rebuttal.accepted_points) > len(rebuttal.rebutted_points):
+        base_confidence = max(base_confidence - 0.06, 0.0)
+
+    if base_confidence >= 0.62:
+        stance = DebateStance.maintain
+    elif base_confidence >= 0.48:
+        stance = DebateStance.soften
+    else:
+        stance = DebateStance.abandon
+
+    adopted_arguments = list(opening_case.supporting_arguments[:2])
+    adopted_arguments.extend(rebuttal.accepted_points[:1])
+    rejected_arguments = list(rebuttal.rebutted_points[:2])
+    if not rejected_arguments:
+        rejected_arguments = [f"对方 {('bear' if side == DebateSide.bull else 'bull')} 论点尚未形成足够说服力。"]
+    plan_adjustments = list(dict.fromkeys([*opening_case.notes, *rebuttal.plan_adjustments][:3]))
+    abandon_conditions = list(dict.fromkeys([*opening_case.weakness_acknowledged, *rebuttal.rebutted_points][:3]))
+    if not abandon_conditions:
+        abandon_conditions = ["若证据包中的关键信号失效，则放弃该观点。"]
+    return FinalDebatePosition(
+        side=side,
+        stance=stance,
+        confidence=round(min(max(base_confidence, 0.0), 1.0), 2),
+        confidence_change=round((base_confidence - (opening_case.confidence or 0.45)), 2),
+        adopted_arguments=adopted_arguments,
+        rejected_arguments=rejected_arguments,
+        plan_adjustments=plan_adjustments,
+        abandon_conditions=abandon_conditions,
+        evidence_item_refs=list(dict.fromkeys([*opening_case.evidence_item_refs, *rebuttal.evidence_item_refs])),
+        notes=[
+            "最终立场必须说明是否仍坚持原方向。",
+            "可从 trade_candidate 降级为 prepare_only / observe_only / no_trade。",
+        ],
+    )
+
+
+async def agent_bull_final_position(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(state, current_stage="agent_bull_final_position")
+    prompt_versions = await _record_committee_prompt_versions(state, "bull_final_position")
+    return {
+        "prompt_versions": prompt_versions,
+        "bull_final_position": _build_final_position(state, DebateSide.bull),
+    }
+
+
+async def agent_bear_final_position(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(state, current_stage="agent_bear_final_position")
+    prompt_versions = await _record_committee_prompt_versions(state, "bear_final_position")
+    return {
+        "prompt_versions": prompt_versions,
+        "bear_final_position": _build_final_position(state, DebateSide.bear),
+    }
+
+
+def _build_long_plan(state: WorkflowState, side: DebateSide) -> LongPlan:
+    opening_case = _required(state, "bull_opening_case" if side == DebateSide.bull else "bear_opening_case")
+    latest_bar, quote, indicators, atr = _committee_price_context(state)
+    if side == DebateSide.bull:
+        entry_zone = opening_case.entry_zone
+        stop_loss = opening_case.stop_loss_or_invalidation.replace("跌破 ", "")
+        invalidation_level = f"{max(latest_bar.low, quote.current_price - atr):.2f}"
+        target_zone = opening_case.target_zone
+    else:
+        entry_zone = opening_case.entry_zone
+        stop_loss = opening_case.stop_loss_or_invalidation.replace("上破 ", "")
+        invalidation_level = f"{min(latest_bar.high, quote.current_price + atr):.2f}"
+        target_zone = opening_case.target_zone
+    risk_reward = round(opening_case.risk_reward or 1.8, 2)
+    if indicators.unavailable:
+        risk_reward = round(max(risk_reward - 0.2, 1.0), 2)
+    return LongPlan(
+        entry_zone=entry_zone,
+        stop_loss=stop_loss,
+        invalidation_level=invalidation_level,
+        target_zone=target_zone,
+        risk_reward=risk_reward,
+        conditions_to_enter=[f"价格重新确认 {entry_zone} 区域。"],
+        conditions_to_abort=[opening_case.stop_loss_or_invalidation],
+        evidence_item_refs=list(opening_case.evidence_item_refs),
+    )
+
+
+def _build_short_plan(state: WorkflowState, side: DebateSide) -> ShortPlan:
+    opening_case = _required(state, "bear_opening_case" if side == DebateSide.bear else "bull_opening_case")
+    latest_bar, quote, indicators, atr = _committee_price_context(state)
+    if side == DebateSide.bear:
+        entry_zone = opening_case.entry_zone
+        stop_loss = opening_case.stop_loss_or_invalidation.replace("上破 ", "")
+        invalidation_level = f"{min(latest_bar.high, quote.current_price + atr):.2f}"
+        target_zone = opening_case.target_zone
+    else:
+        entry_zone = opening_case.entry_zone
+        stop_loss = opening_case.stop_loss_or_invalidation.replace("跌破 ", "")
+        invalidation_level = f"{max(latest_bar.low, quote.current_price - atr):.2f}"
+        target_zone = opening_case.target_zone
+    risk_reward = round(opening_case.risk_reward or 1.8, 2)
+    if indicators.unavailable:
+        risk_reward = round(max(risk_reward - 0.2, 1.0), 2)
+    return ShortPlan(
+        entry_zone=entry_zone,
+        stop_loss=stop_loss,
+        invalidation_level=invalidation_level,
+        target_zone=target_zone,
+        risk_reward=risk_reward,
+        conditions_to_enter=[f"价格重新确认 {entry_zone} 区域。"],
+        conditions_to_abort=[opening_case.stop_loss_or_invalidation],
+        evidence_item_refs=list(opening_case.evidence_item_refs),
+    )
+
+
+def _build_range_plan(state: WorkflowState) -> RangePlan:
+    latest_bar, quote, indicators, atr = _committee_price_context(state)
+    midpoint = (latest_bar.high + latest_bar.low) / 2
+    upper_sell = f"{max(latest_bar.high - atr * 0.15, quote.current_price + atr * 0.25):.2f}-{latest_bar.high:.2f}"
+    lower_buy = f"{latest_bar.low:.2f}-{min(latest_bar.low + atr * 0.15, quote.current_price - atr * 0.25):.2f}"
+    risk_reward = round(1.3 if not indicators.unavailable else 1.1, 2)
+    return RangePlan(
+        upper_sell_zone=upper_sell,
+        lower_buy_zone=lower_buy,
+        upper_stop=f"{latest_bar.high + atr * 0.3:.2f}",
+        lower_stop=f"{max(latest_bar.low - atr * 0.3, quote.current_price - atr * 1.5):.2f}",
+        midline_target=f"{midpoint:.2f}",
+        breakout_confirmation_level=f"{latest_bar.high + atr * 0.2:.2f}",
+        breakdown_confirmation_level=f"{latest_bar.low - atr * 0.2:.2f}",
+        range_invalidated_if=f"日线有效突破 {latest_bar.high + atr * 0.2:.2f} 或跌破 {latest_bar.low - atr * 0.2:.2f}",
+        risk_reward=risk_reward,
+        conditions_to_enter=["价格仍在明确区间内运行。"],
+        conditions_to_abort=["区间突破或失效。"],
+        evidence_item_refs=["technical", "risk"],
+    )
+
+
+def _build_committee_decision(state: WorkflowState) -> CommitteeDecision:
+    evidence_package = _required(state, "evidence_package")
+    bull_final = _required(state, "bull_final_position")
+    bear_final = _required(state, "bear_final_position")
+    bull_opening = _required(state, "bull_opening_case")
+    bear_opening = _required(state, "bear_opening_case")
+    latest_bar, quote, indicators, atr = _committee_price_context(state)
+
+    bull_score = bull_final.confidence
+    bear_score = bear_final.confidence
+    score_gap = abs(bull_score - bear_score)
+    many_degraded_items = sum(
+        1 for item in evidence_package.items if item.tool_status != EvidenceToolStatus.ok
+    )
+    mixed_structure = score_gap < 0.06 or many_degraded_items >= 2
+
+    if bull_score >= 0.62 and bull_score > bear_score + 0.06:
+        final_bias = FinalBias.bullish
+        winning_side: DebateSide | Literal["none"] | None = DebateSide.bull
+        actionability = (
+            Actionability.trade_candidate
+            if bull_score >= 0.68 and not indicators.unavailable
+            else Actionability.prepare_only
+        )
+        long_plan = _build_long_plan(state, DebateSide.bull)
+        short_plan = None
+        range_plan = None
+        wait_conditions = []
+        adopted_arguments = list(bull_final.adopted_arguments[:2])
+        rejected_arguments = list(bear_final.rejected_arguments[:2]) or list(bear_final.abandon_conditions[:2])
+    elif bear_score >= 0.62 and bear_score > bull_score + 0.06:
+        final_bias = FinalBias.bearish
+        winning_side = DebateSide.bear
+        actionability = (
+            Actionability.trade_candidate
+            if bear_score >= 0.68 and not indicators.unavailable
+            else Actionability.prepare_only
+        )
+        long_plan = None
+        short_plan = _build_short_plan(state, DebateSide.bear)
+        range_plan = None
+        wait_conditions = []
+        adopted_arguments = list(bear_final.adopted_arguments[:2])
+        rejected_arguments = list(bull_final.rejected_arguments[:2]) or list(bull_final.abandon_conditions[:2])
+    elif mixed_structure and bull_score >= 0.5 and bear_score >= 0.5:
+        final_bias = FinalBias.range_bound
+        winning_side = None
+        actionability = Actionability.observe_only
+        long_plan = None
+        short_plan = None
+        range_plan = _build_range_plan(state)
+        wait_conditions = [
+            "等待价格确认区间上沿或下沿。",
+            "在突破/跌破确认前不追价。",
+        ]
+        adopted_arguments = list(dict.fromkeys([*bull_final.adopted_arguments[:1], *bear_final.adopted_arguments[:1]]))
+        rejected_arguments = list(
+            dict.fromkeys([*bull_final.rejected_arguments[:1], *bear_final.rejected_arguments[:1]])
+        )
+    else:
+        final_bias = FinalBias.cautious
+        winning_side = "none"
+        actionability = Actionability.no_trade
+        long_plan = None
+        short_plan = None
+        range_plan = None
+        wait_conditions = [
+            "等待更多高质量证据确认方向。",
+            f"当前 ATR 约 {atr:.2f}，波动与信号仍需进一步确认。",
+        ]
+        adopted_arguments = []
+        rejected_arguments = list(
+            dict.fromkeys([*bull_final.rejected_arguments[:1], *bear_final.rejected_arguments[:1]])
+        )
+
+    confidence_score = round(
+        min(
+            max(
+                (bull_score + bear_score) / 2
+                + (0.04 if final_bias in {FinalBias.bullish, FinalBias.bearish} else 0.0),
+                0.0,
+            ),
+            1.0,
+        ),
+        2,
+    )
+    decision_summary = (
+        f"主席裁定为 {final_bias.value}，"
+        f"更强的一方是 {'bull' if bull_score >= bear_score else 'bear'}，"
+        f"当前 actionability={actionability.value}。"
+    )
+    risk_notes = list(dict.fromkeys([
+        *evidence_package.notes[:2],
+        *bull_final.notes[:1],
+        *bear_final.notes[:1],
+    ]))
+    if indicators.unavailable:
+        risk_notes.append("技术指标存在缺失，委员会对 confidence 采取保守折扣。")
+
+    return CommitteeDecision(
+        evidence_package=evidence_package,
+        bull_opening_case=bull_opening,
+        bear_opening_case=bear_opening,
+        bull_rebuttal=_required(state, "bull_rebuttal"),
+        bear_rebuttal=_required(state, "bear_rebuttal"),
+        bull_final_position=bull_final,
+        bear_final_position=bear_final,
+        final_bias=final_bias,
+        actionability=actionability,
+        winning_side=winning_side,
+        adopted_arguments=adopted_arguments,
+        rejected_arguments=rejected_arguments,
+        long_plan=long_plan,
+        short_plan=short_plan,
+        range_plan=range_plan,
+        wait_conditions=wait_conditions,
+        confidence_score=confidence_score,
+        decision_summary=decision_summary,
+        risk_notes=risk_notes,
+        evidence_item_refs=[item.item_id for item in evidence_package.items],
+    )
+
+
+async def agent_trading_committee_chair(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(state, current_stage="agent_trading_committee_chair")
+    prompt_versions = await _record_committee_prompt_versions(state, "chair")
+    return {
+        "prompt_versions": prompt_versions,
+        "committee_decision": _build_committee_decision(state),
+    }
+
+
+def _extract_first_float(text: str | None) -> float | None:
+    if text is None:
+        return None
+    match = re.search(r"(-?\d+(?:\.\d+)?)", text)
+    if match is None:
+        return None
+    try:
+        return float(match.group(1))
+    except ValueError:
+        return None
+
+
+def _validate_plan_price_logic(committee_decision: CommitteeDecision) -> list[str]:
+    errors: list[str] = []
+    if committee_decision.final_bias == FinalBias.bullish and committee_decision.long_plan is not None:
+        entry = _extract_first_float(committee_decision.long_plan.entry_zone)
+        target = _extract_first_float(committee_decision.long_plan.target_zone)
+        stop = _extract_first_float(
+            committee_decision.long_plan.stop_loss or committee_decision.long_plan.invalidation_level
+        )
+        if entry is not None and target is not None and target <= entry:
+            errors.append("bullish long_plan target_zone must be above entry_zone")
+        if entry is not None and stop is not None and stop >= entry:
+            errors.append("bullish long_plan stop_loss must be below entry_zone")
+    if committee_decision.final_bias == FinalBias.bearish and committee_decision.short_plan is not None:
+        entry = _extract_first_float(committee_decision.short_plan.entry_zone)
+        target = _extract_first_float(committee_decision.short_plan.target_zone)
+        stop = _extract_first_float(
+            committee_decision.short_plan.stop_loss or committee_decision.short_plan.invalidation_level
+        )
+        if entry is not None and target is not None and target >= entry:
+            errors.append("bearish short_plan target_zone must be below entry_zone")
+        if entry is not None and stop is not None and stop <= entry:
+            errors.append("bearish short_plan stop_loss must be above entry_zone")
+    if committee_decision.final_bias == FinalBias.range_bound and committee_decision.range_plan is not None:
+        upper_sell = _extract_first_float(committee_decision.range_plan.upper_sell_zone)
+        lower_buy = _extract_first_float(committee_decision.range_plan.lower_buy_zone)
+        if upper_sell is not None and lower_buy is not None and upper_sell <= lower_buy:
+            errors.append("range_plan upper_sell_zone must be above lower_buy_zone")
+    return errors
+
+
+def _build_committee_validation_result(state: WorkflowState) -> DecisionValidationResult:
+    committee_decision = _required(state, "committee_decision")
+    evidence_package = _required(state, "evidence_package")
+    validation_rules = [
+        "final_bias_present",
+        "actionability_present",
+        "confidence_in_range",
+        "bias_specific_plan_present",
+        "trade_candidate_confidence_threshold",
+        "degraded_source_confidence_guard",
+        "plan_price_logic",
+        "risk_reward_guard",
+    ]
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    if not 0.0 <= committee_decision.confidence_score <= 1.0:
+        errors.append("confidence must be between 0 and 1")
+    if committee_decision.final_bias == FinalBias.bullish and committee_decision.long_plan is None:
+        errors.append("bullish decisions require long_plan")
+    if committee_decision.final_bias == FinalBias.bearish and committee_decision.short_plan is None:
+        errors.append("bearish decisions require short_plan")
+    if committee_decision.final_bias == FinalBias.range_bound and committee_decision.range_plan is None:
+        errors.append("range_bound decisions require range_plan")
+    if committee_decision.final_bias == FinalBias.cautious and not committee_decision.wait_conditions:
+        errors.append("cautious decisions require wait_conditions")
+    if committee_decision.actionability == Actionability.trade_candidate and committee_decision.confidence_score < 0.55:
+        errors.append("trade_candidate confidence should be at least 0.55")
+
+    degraded_items = [item for item in evidence_package.items if item.tool_status != EvidenceToolStatus.ok]
+    if degraded_items and committee_decision.confidence_score > 0.8:
+        errors.append("evidence package contains degraded sources, confidence should stay conservative")
+
+    errors.extend(_validate_plan_price_logic(committee_decision))
+
+    if committee_decision.actionability == Actionability.trade_candidate:
+        plans = [
+            plan
+            for plan in [committee_decision.long_plan, committee_decision.short_plan, committee_decision.range_plan]
+            if plan is not None
+        ]
+        risk_rewards = [plan.risk_reward for plan in plans if plan.risk_reward is not None]
+        if risk_rewards and min(risk_rewards) < 1.5:
+            errors.append("risk_reward too low for trade_candidate actionability")
+
+    is_valid = not errors
+    return DecisionValidationResult(
+        is_valid=is_valid,
+        checked_at=datetime.now(UTC),
+        summary="；".join(errors) if errors else "委员会输出通过规则校验。",
+        errors=errors,
+        warnings=warnings,
+        validation_rules=validation_rules,
+    )
+
+
+def node_validate_committee_decision(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(state, current_stage="node_validate_committee_decision")
+    validation_attempts = int(state.get("committee_validation_attempts") or 0) + 1
+    validation_status = _build_committee_validation_result(
+        {**state, "committee_validation_attempts": validation_attempts}
+    )
+    return {
+        "committee_validation_attempts": validation_attempts,
+        "validation_status": validation_status,
+        "validation_errors": list(validation_status.errors),
+        "validation_warnings": list(validation_status.warnings),
+        "errors": list(validation_status.errors),
+    }
+
+
+def _build_repair_decision(state: WorkflowState) -> CommitteeDecision:
+    committee_decision = _required(state, "committee_decision")
+    validation_errors = list(state.get("validation_errors") or [])
+    if not validation_errors:
+        return committee_decision
+
+    updated_actionability = committee_decision.actionability
+    if committee_decision.final_bias == FinalBias.cautious:
+        updated_actionability = Actionability.no_trade
+    elif committee_decision.actionability == Actionability.trade_candidate:
+        updated_actionability = Actionability.prepare_only
+
+    updated_confidence = round(max(committee_decision.confidence_score - 0.06, 0.0), 2)
+    updated_risk_notes = list(dict.fromkeys([*committee_decision.risk_notes, *validation_errors]))
+    return committee_decision.model_copy(
+        update={
+            "actionability": updated_actionability,
+            "confidence_score": updated_confidence,
+            "risk_notes": updated_risk_notes,
+            "decision_summary": f"{committee_decision.decision_summary} 已根据验证错误进行保守修复。",
+            "wait_conditions": committee_decision.wait_conditions
+            or ["修复后仍需重新确认最终决策是否满足规则。"],
+        }
+    )
+
+
+async def agent_repair_committee_decision(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(state, current_stage="agent_repair_committee_decision")
+    prompt_versions = await _record_committee_prompt_versions(state, "repair")
+    repair_attempts = int(state.get("committee_repair_attempts") or 0) + 1
+    return {
+        "prompt_versions": prompt_versions,
+        "committee_repair_attempts": repair_attempts,
+        "committee_decision": _build_repair_decision(state),
+    }
+
+
+def _build_final_forecast_from_committee_decision(state: WorkflowState) -> FinalForecast:
+    committee_decision = _required(state, "committee_decision")
+    latest_bar = _required(state, "latest_bar")
+    quote = _required(state, "quote")
+    indicators = _required(state, "indicators")
+    base_forecast = create_research_forecast_from_inputs(
+        latest_bar=latest_bar,
+        quote=quote,
+        indicators=indicators,
+    )
+
+    if committee_decision.final_bias == FinalBias.bullish:
+        direction = ForecastDirection.bullish
+    elif committee_decision.final_bias == FinalBias.bearish:
+        direction = ForecastDirection.bearish
+    else:
+        direction = ForecastDirection.neutral
+
+    if direction != base_forecast.direction:
+        atr = _usable_atr(indicators, latest_bar, quote.current_price)
+        entry_price, take_profit_price, stop_loss_price = _research_levels(quote.current_price, atr, direction)
+        entry_price_low = None
+        entry_price_high = None
+        if direction == ForecastDirection.neutral:
+            entry_price_low, entry_price_high = _neutral_entry_range(quote.current_price, atr, latest_bar)
+            entry_price = round((entry_price_low + entry_price_high) / 2, 2)
+        base_forecast.direction = direction
+        base_forecast.entry_price = entry_price
+        base_forecast.entry_price_low = entry_price_low
+        base_forecast.entry_price_high = entry_price_high
+        base_forecast.take_profit_price = take_profit_price
+        base_forecast.stop_loss_price = stop_loss_price
+        base_forecast.holding_period = _holding_period(direction, atr, quote.current_price)
+        base_forecast.intraday_action = _intraday_action(
+            direction,
+            entry_price,
+            take_profit_price,
+            stop_loss_price,
+            entry_price_low,
+            entry_price_high,
+        )
+        base_forecast.long_term_action = _long_term_action(direction)
+
+    return FinalForecast(
+        **base_forecast.model_dump(),
+        final_bias=committee_decision.final_bias,
+        actionability=committee_decision.actionability,
+        evidence_package=committee_decision.evidence_package,
+        committee_decision=committee_decision,
+        validation_status=state.get("validation_status"),
+        prompt_versions=list(state.get("prompt_versions") or []),
+    )
+
+
+async def node_persist_forecast(state: WorkflowState) -> WorkflowState:
+    _schedule_scheduler_status_update(state, current_stage="node_persist_forecast")
+    repository = state.get("repository")
+    if repository is None:
+        return {"persistence_status": "skipped: repository not provided"}
+
+    validation_status = state.get("validation_status")
+    validation_attempts = int(state.get("committee_validation_attempts") or 0)
+    if validation_status is not None and not validation_status.is_valid and validation_attempts >= 3:
+        run_id = state.get("run_id")
+        if run_id is None:
+            run = await repository.create_research_run(_input_summary(state))
+            run_id = run.id
+        if run_id is None:
+            raise ValueError("workflow state missing research run id for failed persistence")
+        await repository.mark_run_failed(
+            run_id,
+            validation_status.summary or "committee decision failed validation",
+        )
+        return {
+            "run_id": run_id,
+            "persistence_status": "forecast_failed_validation",
+        }
+
+    forecast = state.get("final_forecast") or state.get("forecast")
+    if forecast is None:
+        if state.get("committee_decision") is not None:
+            forecast = _build_final_forecast_from_committee_decision(state)
+        else:
+            latest_bar = _required(state, "latest_bar")
+            quote = _required(state, "quote")
+            indicators = _required(state, "indicators")
+            forecast = create_research_forecast_from_inputs(
+                latest_bar=latest_bar,
+                quote=quote,
+                indicators=indicators,
+            )
+
+    run_id = state.get("run_id")
+    if run_id is None:
+        run = await repository.create_research_run(_input_summary(state))
+        run_id = run.id
+    if run_id is None:
+        raise ValueError("workflow state missing research run id for forecast persistence")
+
+    saved_forecast = await repository.save_forecast(run_id, forecast)
+    await repository.mark_run_success(run_id)
+    final_forecast = forecast if isinstance(forecast, FinalForecast) else state.get("final_forecast")
+    return {
+        "run_id": run_id,
+        "forecast": saved_forecast,
+        "final_forecast": final_forecast,
+        "persistence_status": "forecast_saved",
     }
 
 
@@ -1029,26 +2404,26 @@ def agent_forecast_planning(state: WorkflowState) -> WorkflowState:
         forecast.risk_summary = f"{forecast.risk_summary} {unavailable_note}"
     forecast.window_directions = _forecast_window_directions(forecast.direction, forecast.confidence_score)
 
-    return {**state, "forecast": forecast}
+    return {"forecast": forecast}
 
 
 async def tool_persist_research_run(state: WorkflowState) -> WorkflowState:
     _schedule_scheduler_status_update(state, current_stage="tool_persist_research_run")
     repository = state.get("repository")
     if repository is None:
-        return {**state, "persistence_status": "skipped: repository not provided"}
+        return {"persistence_status": "skipped: repository not provided"}
     if "run_id" in state:
-        return state
+        return {}
 
     run = await repository.create_research_run(_input_summary(state))
-    return {**state, "run_id": run.id, "persistence_status": "research_run_created"}
+    return {"run_id": run.id, "persistence_status": "research_run_created"}
 
 
 async def tool_persist_forecast(state: WorkflowState) -> WorkflowState:
     _schedule_scheduler_status_update(state, current_stage="tool_persist_forecast")
     repository = state.get("repository")
     if repository is None:
-        return {**state, "persistence_status": "skipped: repository not provided"}
+        return {"persistence_status": "skipped: repository not provided"}
 
     forecast = state.get("forecast")
     if forecast is None:
@@ -1056,14 +2431,14 @@ async def tool_persist_forecast(state: WorkflowState) -> WorkflowState:
 
     run_id = state.get("run_id")
     if run_id is None:
-        state = await tool_persist_research_run(state)
-        run_id = state.get("run_id")
+        persisted = await tool_persist_research_run(state)
+        run_id = persisted.get("run_id") or state.get("run_id")
     if run_id is None:
         raise ValueError("workflow state missing research run id for forecast persistence")
 
     saved_forecast = await repository.save_forecast(run_id, forecast)
     await repository.mark_run_success(run_id)
-    return {**state, "forecast": saved_forecast, "persistence_status": "forecast_saved"}
+    return {"forecast": saved_forecast, "persistence_status": "forecast_saved"}
 
 
 def router_finalize_result(state: WorkflowState) -> WorkflowState:
@@ -1071,7 +2446,7 @@ def router_finalize_result(state: WorkflowState) -> WorkflowState:
     forecast = state.get("forecast")
     if forecast is None:
         raise ValueError("workflow state missing forecast result")
-    return {**state, "result": forecast}
+    return {"result": forecast}
 
 
 def _direction_from_inputs(
@@ -1316,7 +2691,7 @@ def _remote_agent_response(
     if not settings.openai_base_url or not settings.openai_model or not settings.openai_api_key:
         message = (
             f"OpenAI-compatible {agent_name} agent 未配置有效 base_url/model/API Key，"
-            "已回退到 deterministic workflow 输出。"
+            "已标记为失败，不生成兜底输出。"
         )
         detail = _settings_snapshot_for_agent(settings)
         logger.warning("%s detail=%s", message, detail)
@@ -1344,7 +2719,7 @@ def _remote_agent_response(
         ).invoke_agent(agent_name, payload)
     except OpenAIClientError as exc:
         detail = str(exc).strip() or "agent call failed"
-        message = f"OpenAI-compatible {agent_name} agent 调用失败，已回退到 deterministic workflow 输出。"
+        message = f"OpenAI-compatible {agent_name} agent 调用失败，已标记为失败，不生成兜底输出。"
         logger.warning("%s detail=%s", message, detail)
         return (
             None,
@@ -1358,7 +2733,25 @@ def _remote_agent_response(
             ),
         )
 
-    return AgentApiResponse.model_validate(result.model_dump()), None, None
+    validated = AgentApiResponse.model_validate(result.model_dump())
+    cleaned_summary = validated.summary.strip()
+    if not cleaned_summary:
+        detail = "blank summary"
+        message = f"OpenAI-compatible {agent_name} agent 返回空摘要，已标记为失败，不生成兜底输出。"
+        logger.warning("%s detail=%s", message, detail)
+        return (
+            None,
+            message,
+            _agent_diagnostic_record(
+                agent=agent_name,
+                stage=stage,
+                status="invalid_response",
+                message=message,
+                detail=detail,
+            ),
+        )
+
+    return validated.model_copy(update={"summary": cleaned_summary}), None, None
 
 
 def _settings_snapshot_for_agent(settings: GoldFXGraphSettings) -> str:
@@ -1390,18 +2783,11 @@ def _agent_diagnostic_record(
 def _append_agent_diagnostic(
     state: WorkflowState,
     diagnostic: dict[str, Any] | None,
-) -> WorkflowState:
-    if diagnostic is None:
-        return state
-
+) -> list[dict[str, Any]]:
     diagnostics = list(state.get("agent_diagnostics") or [])
-    diagnostics.append(diagnostic)
-    return {**state, "agent_diagnostics": diagnostics}
-
-
-def _summary_or_fallback(summary: str | None, fallback: str) -> str:
-    cleaned = (summary or "").strip()
-    return cleaned or fallback
+    if diagnostic is not None:
+        diagnostics.append(diagnostic)
+    return diagnostics
 
 
 def _append_summary_section(summary: str, title: str, body: str | None) -> str:
@@ -1414,20 +2800,33 @@ def _append_summary_section(summary: str, title: str, body: str | None) -> str:
     return f"{summary}{separator}{title}：{cleaned_body}"
 
 
-def _normalize_news_summary_representative_titles(summary: str, fallback_summary: str) -> str:
+def _failure_summary(agent_name: str, detail: str | None) -> str:
+    cleaned_detail = (detail or "").strip()
+    if cleaned_detail:
+        return f"失败：{agent_name} agent 未能产出有效结果。{cleaned_detail}"
+    return f"失败：{agent_name} agent 未能产出有效结果。"
+
+
+def _normalize_news_summary_representative_titles(summary: str, reference_summary: str) -> str:
     summary_lines = summary.splitlines()
-    fallback_lines = fallback_summary.splitlines()
-    summary_marker_index = next((index for index, line in enumerate(summary_lines) if line.strip() == "代表性标题："), -1)
-    fallback_marker_index = next((index for index, line in enumerate(fallback_lines) if line.strip() == "代表性标题："), -1)
-    if summary_marker_index < 0 or fallback_marker_index < 0:
+    reference_lines = reference_summary.splitlines()
+    summary_marker_index = next(
+        (index for index, line in enumerate(summary_lines) if line.strip() == "代表性标题："),
+        -1,
+    )
+    reference_marker_index = next(
+        (index for index, line in enumerate(reference_lines) if line.strip() == "代表性标题："),
+        -1,
+    )
+    if summary_marker_index < 0 or reference_marker_index < 0:
         return summary
 
     prefix = summary_lines[: summary_marker_index + 1]
-    fallback_block = fallback_lines[fallback_marker_index + 1 :]
-    if not fallback_block:
+    reference_block = reference_lines[reference_marker_index + 1 :]
+    if not reference_block:
         return summary
 
-    return "\n".join([*prefix, *fallback_block])
+    return "\n".join([*prefix, *reference_block])
 
 
 def _merge_notes(base_notes: list[str] | None, extra_notes: list[str] | None) -> list[str]:

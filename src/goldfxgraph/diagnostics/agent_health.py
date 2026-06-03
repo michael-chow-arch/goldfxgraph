@@ -33,6 +33,12 @@ AGENT_HEALTH_PROBE_NAMES = (
 )
 
 
+def _merge_state(state: WorkflowState, delta: dict[str, object]) -> WorkflowState:
+    merged = dict(state)
+    merged.update(delta)
+    return merged
+
+
 @dataclass(slots=True)
 class AgentHealthProbeResult:
     agent: str
@@ -120,21 +126,21 @@ async def _build_probe_state(
     signal_http_transport: httpx.BaseTransport | None,
 ) -> WorkflowState:
     state = WorkflowState(settings=settings, repository=repository, signal_http_transport=signal_http_transport)
-    state = await tool_load_market_data(state)
-    state = tool_compute_indicators(state)
+    state = _merge_state(state, await tool_load_market_data(state))
+    state = _merge_state(state, tool_compute_indicators(state))
     quote_warning = None
     try:
-        state = tool_fetch_current_gold_quote(state)
+        state = _merge_state(state, tool_fetch_current_gold_quote(state))
     except QuoteProviderError as exc:
         quote_warning = str(exc).strip() or "Current quote provider failed"
         state = {**state, "quote_warning": quote_warning}
     else:
-        state = tool_fetch_macro_inputs(state)
-        state = tool_fetch_newsflow_inputs(state)
-        state = tool_fetch_pizza_index_inputs(state)
-        state = await tool_load_forecast_feedback_history(state)
-        state = tool_fetch_market_sentiment_inputs(state)
-        state = tool_fetch_alt_data_inputs(state)
+        state = _merge_state(state, tool_fetch_macro_inputs(state))
+        state = _merge_state(state, tool_fetch_newsflow_inputs(state))
+        state = _merge_state(state, tool_fetch_pizza_index_inputs(state))
+        state = _merge_state(state, await tool_load_forecast_feedback_history(state))
+        state = _merge_state(state, tool_fetch_market_sentiment_inputs(state))
+        state = _merge_state(state, tool_fetch_alt_data_inputs(state))
     if quote_warning:
         state["quote_warning"] = quote_warning
     return state

@@ -1,15 +1,37 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import inspect
+from sqlalchemy import func, inspect, select
 
-from goldfxgraph.persistence.database import create_session_factory, init_models
+from goldfxgraph.persistence import (
+    DEFAULT_COMMITTEE_PROMPT_KEYS,
+    DEFAULT_COMMITTEE_PROMPT_SEEDS,
+    create_session_factory,
+    init_models,
+    seed_default_committee_prompt_templates,
+)
+from goldfxgraph.persistence.models import PromptTemplateModel
 from goldfxgraph.persistence.repositories import ForecastRepository
 from goldfxgraph.schemas.forecast import (
+    Actionability,
     AgentVote,
+    CommitteeDecision,
+    DebateCase,
+    DebateRebuttal,
+    DebateSide,
+    DebateStance,
+    DecisionValidationResult,
+    EvidencePackage,
+    EvidencePackageItem,
+    EvidenceToolStatus,
+    FinalBias,
+    FinalDebatePosition,
+    FinalForecast,
     ForecastDirection,
     ForecastResult,
     ForecastWindowDirection,
+    LongPlan,
+    PromptVersionMetadata,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -65,6 +87,159 @@ def _forecast(
     )
 
 
+def _committee_forecast() -> FinalForecast:
+    now = datetime.now(UTC)
+    evidence_package = EvidencePackage(
+        symbol="XAUUSD",
+        reference_time=now,
+        data_timestamp=now,
+        data_source="TradingView",
+        summary="证据包摘要",
+        items=[
+            EvidencePackageItem(
+                item_id="technical",
+                specialist_name="technical",
+                category="price_action",
+                signal="bullish",
+                confidence=0.71,
+                key_evidence=["技术面偏多"],
+                risk_factors=["波动仍在"],
+                invalidation_conditions=["跌破 2038"],
+                important_levels=["2050-2060"],
+                data_freshness="fresh",
+                tool_status=EvidenceToolStatus.ok,
+                evidence_refs=["technical_summary"],
+            )
+        ],
+        notes=["仅供研究"],
+    )
+    bull_opening_case = DebateCase(
+        side=DebateSide.bull,
+        thesis="看多开场",
+        evidence_item_refs=["technical"],
+        entry_zone="2050-2055",
+        stop_loss_or_invalidation="2038",
+        target_zone="2075-2080",
+        risk_reward=2.1,
+        weakness_acknowledged=["回撤风险"],
+        supporting_arguments=["技术偏多"],
+        confidence=0.68,
+    )
+    bear_opening_case = DebateCase(
+        side=DebateSide.bear,
+        thesis="看空开场",
+        evidence_item_refs=["technical"],
+        entry_zone="2055-2060",
+        stop_loss_or_invalidation="2068",
+        target_zone="2035-2040",
+        risk_reward=2.0,
+        weakness_acknowledged=["趋势仍有延续可能"],
+        supporting_arguments=["阻力仍然存在"],
+        confidence=0.57,
+    )
+    bull_rebuttal = DebateRebuttal(
+        side=DebateSide.bull,
+        responds_to_side=DebateSide.bear,
+        rebutted_points=["阻力仍在"],
+        accepted_points=["波动风险仍存在"],
+        plan_adjustments=["等待回踩确认"],
+        confidence_trend="up",
+        confidence_change=0.02,
+        evidence_item_refs=["technical"],
+    )
+    bear_rebuttal = DebateRebuttal(
+        side=DebateSide.bear,
+        responds_to_side=DebateSide.bull,
+        rebutted_points=["趋势延续"],
+        accepted_points=["失效条件清晰"],
+        plan_adjustments=["收紧止损"],
+        confidence_trend="flat",
+        confidence_change=0.0,
+        evidence_item_refs=["technical"],
+    )
+    bull_final_position = FinalDebatePosition(
+        side=DebateSide.bull,
+        stance=DebateStance.maintain,
+        confidence=0.7,
+        confidence_change=0.02,
+        adopted_arguments=["趋势尚未破坏"],
+        rejected_arguments=["追涨风险"],
+        plan_adjustments=["分批观察"],
+        abandon_conditions=["跌破 2038"],
+        evidence_item_refs=["technical"],
+    )
+    bear_final_position = FinalDebatePosition(
+        side=DebateSide.bear,
+        stance=DebateStance.soften,
+        confidence=0.55,
+        confidence_change=-0.01,
+        adopted_arguments=["上方压力存在"],
+        rejected_arguments=["追空性价比不高"],
+        plan_adjustments=["观察为主"],
+        abandon_conditions=["突破 2068"],
+        evidence_item_refs=["technical"],
+    )
+    committee_decision = CommitteeDecision(
+        evidence_package=evidence_package,
+        bull_opening_case=bull_opening_case,
+        bear_opening_case=bear_opening_case,
+        bull_rebuttal=bull_rebuttal,
+        bear_rebuttal=bear_rebuttal,
+        bull_final_position=bull_final_position,
+        bear_final_position=bear_final_position,
+        final_bias=FinalBias.bullish,
+        actionability=Actionability.trade_candidate,
+        winning_side=DebateSide.bull,
+        adopted_arguments=["趋势延续", "风险可控"],
+        rejected_arguments=["盲目追涨"],
+        long_plan=LongPlan(
+            entry_zone="2050-2055",
+            stop_loss="2038",
+            invalidation_level="2036",
+            target_zone="2075-2080",
+            risk_reward=2.2,
+            conditions_to_enter=["回踩确认"],
+            conditions_to_abort=["跌破 2038"],
+            evidence_item_refs=["technical"],
+        ),
+        short_plan=None,
+        range_plan=None,
+        wait_conditions=[],
+        confidence_score=0.69,
+        decision_summary="委员会看多",
+        risk_notes=["仅供研究"],
+        evidence_item_refs=["technical"],
+    )
+    return FinalForecast(
+        **_forecast().model_dump(),
+        final_bias=FinalBias.bullish,
+        actionability=Actionability.trade_candidate,
+        evidence_package=evidence_package,
+        committee_decision=committee_decision,
+        validation_status=DecisionValidationResult(
+            is_valid=True,
+            checked_at=now,
+            summary="通过",
+            errors=[],
+            warnings=[],
+            validation_rules=["confidence_in_range"],
+        ),
+        prompt_versions=[
+            PromptVersionMetadata(
+                prompt_key="trading_committee.chair.system",
+                version="1.0.0",
+                prompt_type="system",
+                agent_name="chair",
+                node_name="agent_trading_committee_chair",
+                model_family="gpt-4.1",
+                is_active=True,
+                rendered_variable_names=["evidence_package"],
+                output_schema_ref="CommitteeDecision",
+            )
+        ],
+    )
+
+
 async def test_repository_saves_run_and_latest_forecast() -> None:
     session_factory = create_session_factory("sqlite+aiosqlite:///:memory:")
     await init_models(session_factory.engine)
@@ -90,6 +265,33 @@ async def test_repository_saves_run_and_latest_forecast() -> None:
     assert loaded_run.forecast.entry_price_high == 2051
 
 
+async def test_repository_round_trips_committee_forecast_metadata() -> None:
+    session_factory = create_session_factory("sqlite+aiosqlite:///:memory:")
+    await init_models(session_factory.engine)
+    repo = ForecastRepository(session_factory)
+
+    run = await repo.create_research_run(input_summary={"symbol": "XAUUSD", "flow": "committee"})
+    saved = await repo.save_forecast(run.id, _committee_forecast())
+    loaded = await repo.get_latest_forecast()
+    loaded_run = await repo.get_research_run(run.id)
+
+    assert saved.id is not None
+    assert loaded is not None
+    assert isinstance(loaded, FinalForecast)
+    assert loaded.final_bias == FinalBias.bullish
+    assert loaded.actionability == Actionability.trade_candidate
+    assert loaded.evidence_package is not None
+    assert loaded.committee_decision is not None
+    assert loaded.validation_status is not None
+    assert loaded.prompt_versions[0].prompt_key == "trading_committee.chair.system"
+    assert loaded_run is not None
+    assert loaded_run.forecast is not None
+    assert isinstance(loaded_run.forecast, FinalForecast)
+    assert loaded_run.forecast.committee_decision is not None
+    assert loaded_run.forecast.prompt_versions[0].version == "1.0.0"
+    assert loaded_run.forecast.committee_decision.long_plan is not None
+
+
 async def test_repository_persists_scheduler_run_status_snapshot() -> None:
     session_factory = create_session_factory("sqlite+aiosqlite:///:memory:")
     await init_models(session_factory.engine)
@@ -105,7 +307,7 @@ async def test_repository_persists_scheduler_run_status_snapshot() -> None:
                 "agent": "technical",
                 "stage": "agent_technical_analysis",
                 "status": "failed",
-                "message": "OpenAI-compatible technical agent 调用失败，已回退到 deterministic workflow 输出。",
+                "message": "OpenAI-compatible technical agent 调用失败，已标记为失败，不生成兜底输出。",
                 "detail": "HTTP 500",
             }
         ],
@@ -237,3 +439,66 @@ async def test_init_models_backfills_missing_forecast_columns() -> None:
     assert "window_directions" in columns
     assert "entry_price_low" in columns
     assert "entry_price_high" in columns
+    assert "evidence_package" in columns
+    assert "committee_decision" in columns
+    assert "validation_status" in columns
+    assert "prompt_versions" in columns
+
+
+async def test_init_models_creates_prompt_template_table() -> None:
+    session_factory = create_session_factory("sqlite+aiosqlite:///:memory:")
+    await init_models(session_factory.engine)
+
+    async with session_factory.engine.begin() as connection:
+        table_names = await connection.run_sync(lambda sync_connection: inspect(sync_connection).get_table_names())
+        prompt_columns = await connection.run_sync(
+            lambda sync_connection: {
+                column["name"] for column in inspect(sync_connection).get_columns("prompt_templates")
+            }
+        )
+
+    assert "prompt_templates" in table_names
+    assert "prompt_key" in prompt_columns
+    assert "version" in prompt_columns
+    assert "prompt_text_en" in prompt_columns
+    assert "prompt_text_zh" in prompt_columns
+    assert "variables_schema" in prompt_columns
+    assert "is_active" in prompt_columns
+
+
+async def test_seed_default_committee_prompt_templates_is_idempotent() -> None:
+    session_factory = create_session_factory("sqlite+aiosqlite:///:memory:")
+    await init_models(session_factory.engine)
+
+    written_first = await seed_default_committee_prompt_templates(session_factory)
+    written_second = await seed_default_committee_prompt_templates(session_factory)
+
+    async with session_factory.sessionmaker() as session:
+        total_rows = await session.scalar(select(func.count(PromptTemplateModel.id)))
+        active_counts_result = await session.execute(
+            select(
+                PromptTemplateModel.prompt_key,
+                func.count(PromptTemplateModel.id),
+            )
+            .where(PromptTemplateModel.is_active.is_(True))
+            .group_by(PromptTemplateModel.prompt_key)
+        )
+        prompt_rows_result = await session.execute(
+            select(
+                PromptTemplateModel.prompt_key,
+                PromptTemplateModel.version,
+                PromptTemplateModel.prompt_type,
+                PromptTemplateModel.is_active,
+            ).order_by(PromptTemplateModel.prompt_key.asc(), PromptTemplateModel.prompt_type.asc())
+        )
+
+    active_counts = dict(active_counts_result.all())
+    prompt_rows = prompt_rows_result.all()
+
+    assert written_first == len(DEFAULT_COMMITTEE_PROMPT_KEYS)
+    assert written_second == len(DEFAULT_COMMITTEE_PROMPT_SEEDS)
+    assert total_rows == len(DEFAULT_COMMITTEE_PROMPT_KEYS)
+    assert set(active_counts.values()) == {1}
+    assert {row[0] for row in prompt_rows} == set(DEFAULT_COMMITTEE_PROMPT_KEYS)
+    assert {row[2] for row in prompt_rows} == {"system", "user"}
+    assert all(row[3] is True for row in prompt_rows)

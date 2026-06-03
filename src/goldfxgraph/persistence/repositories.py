@@ -19,12 +19,22 @@ from goldfxgraph.persistence.models import (
     SchedulerRunModel,
 )
 from goldfxgraph.schemas.forecast import (
+    Actionability,
+    CommitteeDecision,
     DailyBar,
+    DebateCase,
+    DebateRebuttal,
+    DecisionValidationResult,
+    EvidencePackage,
+    FinalBias,
+    FinalDebatePosition,
+    FinalForecast,
     ForecastDirection,
     ForecastEvaluationResult,
     ForecastHistoryItem,
     ForecastResult,
     ForecastWindowDirection,
+    PromptVersionMetadata,
     ResearchRunResult,
     SchedulerRunStatus,
 )
@@ -309,6 +319,16 @@ class ForecastRepository:
                 agent_votes=[vote.model_dump(mode="json") for vote in forecast.agent_votes],
                 risk_notes=list(forecast.risk_notes),
                 disclaimer=forecast.disclaimer,
+                evidence_package=_json_model(getattr(forecast, "evidence_package", None)),
+                bull_opening_case=_json_model(getattr(forecast, "bull_opening_case", None)),
+                bear_opening_case=_json_model(getattr(forecast, "bear_opening_case", None)),
+                bull_rebuttal=_json_model(getattr(forecast, "bull_rebuttal", None)),
+                bear_rebuttal=_json_model(getattr(forecast, "bear_rebuttal", None)),
+                bull_final_position=_json_model(getattr(forecast, "bull_final_position", None)),
+                bear_final_position=_json_model(getattr(forecast, "bear_final_position", None)),
+                committee_decision=_json_model(getattr(forecast, "committee_decision", None)),
+                validation_status=_json_model(getattr(forecast, "validation_status", None)),
+                prompt_versions=_json_list_model(getattr(forecast, "prompt_versions", None)),
             )
             session.add(forecast_model)
             await session.commit()
@@ -537,7 +557,7 @@ class ForecastRepository:
 
     def _forecast_result_from_model(self, forecast_model: ForecastModel) -> ForecastResult:
         agent_votes = self._json_list(forecast_model.agent_votes)
-        return ForecastResult(
+        base_forecast = ForecastResult(
             id=forecast_model.id,
             run_id=forecast_model.run_id,
             symbol=forecast_model.symbol,
@@ -572,6 +592,58 @@ class ForecastRepository:
             agent_votes=agent_votes,
             risk_notes=list(forecast_model.risk_notes),
             disclaimer=forecast_model.disclaimer,
+        )
+        if (
+            forecast_model.evidence_package is None
+            and forecast_model.bull_opening_case is None
+            and forecast_model.bear_opening_case is None
+            and forecast_model.bull_rebuttal is None
+            and forecast_model.bear_rebuttal is None
+            and forecast_model.bull_final_position is None
+            and forecast_model.bear_final_position is None
+            and forecast_model.committee_decision is None
+            and forecast_model.validation_status is None
+            and not forecast_model.prompt_versions
+        ):
+            return base_forecast
+
+        committee_decision = self._json_object(forecast_model.committee_decision)
+        validation_status = self._json_object(forecast_model.validation_status)
+        evidence_package = self._json_object(forecast_model.evidence_package)
+        bull_opening_case = self._json_object(forecast_model.bull_opening_case)
+        bear_opening_case = self._json_object(forecast_model.bear_opening_case)
+        bull_rebuttal = self._json_object(forecast_model.bull_rebuttal)
+        bear_rebuttal = self._json_object(forecast_model.bear_rebuttal)
+        bull_final_position = self._json_object(forecast_model.bull_final_position)
+        bear_final_position = self._json_object(forecast_model.bear_final_position)
+        prompt_versions = self._json_list(forecast_model.prompt_versions)
+
+        return FinalForecast(
+            **base_forecast.model_dump(),
+            bull_opening_case=DebateCase.model_validate(bull_opening_case) if bull_opening_case else None,
+            bear_opening_case=DebateCase.model_validate(bear_opening_case) if bear_opening_case else None,
+            bull_rebuttal=DebateRebuttal.model_validate(bull_rebuttal) if bull_rebuttal else None,
+            bear_rebuttal=DebateRebuttal.model_validate(bear_rebuttal) if bear_rebuttal else None,
+            bull_final_position=FinalDebatePosition.model_validate(bull_final_position)
+            if bull_final_position
+            else None,
+            bear_final_position=FinalDebatePosition.model_validate(bear_final_position)
+            if bear_final_position
+            else None,
+            final_bias=FinalBias(committee_decision.get("final_bias"))
+            if committee_decision.get("final_bias")
+            else FinalBias.cautious,
+            actionability=Actionability(committee_decision.get("actionability"))
+            if committee_decision.get("actionability")
+            else Actionability.no_trade,
+            evidence_package=EvidencePackage.model_validate(evidence_package) if evidence_package else None,
+            committee_decision=CommitteeDecision.model_validate(committee_decision) if committee_decision else None,
+            validation_status=DecisionValidationResult.model_validate(validation_status)
+            if validation_status
+            else None,
+            prompt_versions=[
+                PromptVersionMetadata.model_validate(prompt_version) for prompt_version in prompt_versions
+            ],
         )
 
     def _evaluation_result_from_model(self, evaluation_model: ForecastEvaluationModel) -> ForecastEvaluationResult:
@@ -623,6 +695,30 @@ def _ensure_utc(value: datetime) -> datetime:
 
 def _json_safe_object(value: dict[str, object]) -> JsonObject:
     return _JSON_OBJECT_ADAPTER.dump_python(value, mode="json")
+
+
+def _json_model(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    if isinstance(value, dict):
+        return _JSON_OBJECT_ADAPTER.dump_python(value, mode="json")
+    return None
+
+
+def _json_list_model(value: Any) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        result: list[dict[str, Any]] = []
+        for item in value:
+            if hasattr(item, "model_dump"):
+                result.append(item.model_dump(mode="json"))
+            elif isinstance(item, dict):
+                result.append(_JSON_OBJECT_ADAPTER.dump_python(item, mode="json"))
+        return result
+    return []
 
 
 def _normalize_symbol(symbol: str) -> str:

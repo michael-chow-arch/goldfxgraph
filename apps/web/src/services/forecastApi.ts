@@ -1,7 +1,7 @@
 import type {
   DailyBar,
   ForecastHistoryItem,
-  ForecastResult,
+  FinalForecast,
   SchedulerRunStatus,
 } from "@/types/forecast";
 import {
@@ -80,7 +80,7 @@ function buildUrl(path: string): string {
   return `${apiBaseUrl()}${path}`;
 }
 
-export async function fetchLatestForecast(): Promise<ForecastResult | null> {
+export async function fetchLatestForecast(): Promise<FinalForecast | null> {
   let response: Response;
 
   try {
@@ -119,7 +119,7 @@ export async function fetchLatestForecast(): Promise<ForecastResult | null> {
     return null;
   }
 
-  return JSON.parse(bodyText) as ForecastResult;
+  return JSON.parse(bodyText) as FinalForecast;
 }
 
 export async function fetchForecastHistory(limit = 30): Promise<ForecastHistoryItem[]> {

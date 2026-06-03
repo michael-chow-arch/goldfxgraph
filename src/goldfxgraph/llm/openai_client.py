@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from json import JSONDecodeError
-from typing import Any
+from typing import Any, TypeVar
 
 import httpx
 from pydantic import BaseModel, Field, ValidationError
@@ -21,6 +21,9 @@ class OpenAIAgentResult(BaseModel):
     risk_notes: list[str] = Field(default_factory=list)
 
 
+TStructuredModel = TypeVar("TStructuredModel", bound=BaseModel)
+
+
 class OpenAIAgentClient:
     def __init__(
         self,
@@ -35,6 +38,61 @@ class OpenAIAgentClient:
         self._transport = transport
 
     def invoke_agent(self, agent_name: str, payload: dict[str, Any]) -> OpenAIAgentResult:
+        system_prompt = (
+            "你是 GoldFXGraph 的分析 agent，名称为 "
+            f"{agent_name}。请只返回一个 JSON object，"
+            "字段必须包含 summary、direction、confidence、risk_notes。"
+            "所有自然语言字段必须使用简体中文，"
+            "如果 payload 中存在 title_cn、source_cn、summary_cn 等中文翻译字段，必须优先使用，"
+            "尤其在 news 与 market_sentiment 场景中不得直接输出英文新闻标题或英文市场标题作为摘要主体，"
+            "如果 payload 中包含 newsflow_inputs 或 polymarket_inputs，请优先引用其中的中文标题、"
+            "中文来源与中文摘要，"
+            "direction 只能使用 bullish、bearish、neutral。"
+            "risk_notes 必须是字符串数组。"
+        )
+        user_prompt = json.dumps(
+            {
+                "agent_name": agent_name,
+                "payload": payload,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        return self.invoke_prompted_model(
+            agent_name=agent_name,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            output_model=OpenAIAgentResult,
+        )
+
+    def invoke_prompted_model(
+        self,
+        *,
+        agent_name: str,
+        system_prompt: str,
+        user_prompt: str,
+        output_model: type[TStructuredModel],
+    ) -> TStructuredModel:
+        data = self._post_chat_completions(
+            agent_name,
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+        content = self._extract_message_content(data, agent_name)
+        structured_payload = self._parse_content_json(content, agent_name)
+        if output_model is OpenAIAgentResult:
+            structured_payload = self._normalize_structured_payload(structured_payload)
+
+        try:
+            return output_model.model_validate(structured_payload)
+        except ValidationError as exc:
+            raise OpenAIClientError(
+                f"OpenAI-compatible response returned invalid structured result for {agent_name}"
+            ) from exc
+
+    def _post_chat_completions(self, agent_name: str, messages: list[dict[str, str]]) -> dict[str, Any]:
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
@@ -42,34 +100,7 @@ class OpenAIAgentClient:
         request_payload = {
             "model": self._model,
             "response_format": {"type": "json_object"},
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "你是 GoldFXGraph 的分析 agent，名称为 "
-                        f"{agent_name}。请只返回一个 JSON object，"
-                        "字段必须包含 summary、direction、confidence、risk_notes。"
-                        "所有自然语言字段必须使用简体中文，"
-                        "如果 payload 中存在 title_cn、source_cn、summary_cn 等中文翻译字段，必须优先使用，"
-                        "尤其在 news 与 market_sentiment 场景中不得直接输出英文新闻标题或英文市场标题作为摘要主体，"
-                        "如果 payload 中包含 newsflow_inputs 或 polymarket_inputs，请优先引用其中的中文标题、"
-                        "中文来源与中文摘要，"
-                        "direction 只能使用 bullish、bearish、neutral。"
-                        "risk_notes 必须是字符串数组。"
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            "agent_name": agent_name,
-                            "payload": payload,
-                        },
-                        ensure_ascii=False,
-                        sort_keys=True,
-                    ),
-                },
-            ],
+            "messages": messages,
         }
         client_kwargs: dict[str, Any] = {"timeout": 20}
         if self._transport is not None:
@@ -97,16 +128,9 @@ class OpenAIAgentClient:
         except JSONDecodeError as exc:
             raise OpenAIClientError(f"OpenAI-compatible response returned invalid JSON for {agent_name}") from exc
 
-        content = self._extract_message_content(data, agent_name)
-        structured_payload = self._parse_content_json(content, agent_name)
-        structured_payload = self._normalize_structured_payload(structured_payload)
-
-        try:
-            return OpenAIAgentResult.model_validate(structured_payload)
-        except ValidationError as exc:
-            raise OpenAIClientError(
-                f"OpenAI-compatible response returned invalid structured result for {agent_name}"
-            ) from exc
+        if not isinstance(data, dict):
+            raise OpenAIClientError(f"OpenAI-compatible response returned invalid JSON for {agent_name}")
+        return data
 
     @staticmethod
     def _extract_message_content(data: Any, agent_name: str) -> str | dict[str, Any]:

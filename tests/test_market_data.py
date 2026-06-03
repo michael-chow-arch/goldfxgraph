@@ -1,9 +1,11 @@
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from goldfxgraph.cli import main as goldfxgraph_main
+from goldfxgraph.market_data import tradingview_history
 from goldfxgraph.market_data.csv_loader import CsvValidationError, load_xauusd_daily_csv
 from goldfxgraph.market_data.current_quote import CurrentQuoteProvider, QuoteProviderError
 from goldfxgraph.market_data.ingest import import_xauusd_daily_csv_to_db
@@ -290,6 +292,56 @@ def test_yahoo_history_fetcher_is_removed_from_daily_bar_backfill() -> None:
             start_date=date(2026, 5, 23),
             end_date=date(2026, 5, 26),
         )
+
+
+def test_tradingview_history_websocket_disables_proxy_and_parses_daily_bars(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+    session_id = "cs_123"
+    update_payload = (
+        '{"m":"timescale_update","p":["cs_123",{"s1":{"s":[{"v":[1778544000,4700.0,4710.0,4680.0,4695.0,1234]}]}}]}'
+    )
+    completed_payload = '{"m":"series_completed","p":["cs_123","s1"]}'
+
+    class FakeHistorySocket:
+        def __init__(self) -> None:
+            self.sent_messages: list[str] = []
+            self._frames = [
+                f"~m~{len(update_payload)}~m~{update_payload}~m~{len(completed_payload)}~m~{completed_payload}"
+            ]
+            self._index = 0
+
+        def __enter__(self) -> "FakeHistorySocket":
+            return self
+
+        def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+            return False
+
+        def send(self, message: str) -> None:
+            self.sent_messages.append(message)
+
+        def recv(self, timeout: float | None = None) -> str:
+            if self._index >= len(self._frames):
+                raise TimeoutError("fake history socket exhausted")
+            frame = self._frames[self._index]
+            self._index += 1
+            return frame
+
+    def fake_connect(*args: Any, **kwargs: Any) -> FakeHistorySocket:
+        captured.update(kwargs)
+        return FakeHistorySocket()
+
+    monkeypatch.setattr(tradingview_history, "_random_session_id", lambda prefix: session_id)
+    monkeypatch.setattr(tradingview_history, "connect", fake_connect)
+
+    bars = tradingview_history.fetch_gold_daily_bars(
+        start_date=date(2026, 5, 12),
+        end_date=date(2026, 5, 12),
+    )
+
+    assert captured["proxy"] is None
+    assert bars[0].date == date(2026, 5, 12)
+    assert bars[0].open == 4700.0
+    assert bars[0].source == "TradingView"
 
 
 def test_goldfxgraph_cli_dispatches_import_market_data_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

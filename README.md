@@ -6,6 +6,8 @@
 
 Multi-Agent 预测分析看板 is an open-source **LangGraph** project for multi-agent XAU/USD research. It combines real-time gold prices, historical daily bars, news, macro data, alternative signals, and risk analysis into a coordinated workflow that produces structured entries, take-profit / stop-loss levels, time-window outlooks, and a final research conclusion.
 
+It now also includes a **Two-Round Adversarial Trading Committee** layer and a **Prompt Registry / Prompt Template Management Layer** for the committee agents. The committee layer turns specialist analysis into an evidence package, runs a two-round bull vs. bear debate, and lets a chair agent arbitrate the final research posture. The prompt registry stores versioned English runtime prompts alongside Chinese maintenance translations so the committee prompts stay auditable, reviewable, and easy to evolve.
+
 > This project is for research and decision support only. It is not investment advice and does not provide automated trading.
 
 ---
@@ -51,6 +53,35 @@ Multi-Agent 预测分析看板 is an open-source **LangGraph** project for multi
 | `alt_data` | Alternative data analysis | Pizza Index, macro signals, and other supplemental indicators |
 | `risk` | Risk analysis | Volatility boundaries, drawdown / rebound risk, key price levels, and defensive posture |
 | `forecast` | Final aggregation | Merge all agent outputs into the final direction, trade levels, and time-window outlook |
+| `bull / bear` | Trading committee debate | Build evidence-backed opening, rebuttal, and final positions from the evidence package |
+| `chair` | Trading committee chair | Arbitrate the final bias, actionability, and trade plan |
+| `repair` | Committee repair | Apply conservative fixes when validation fails |
+
+## Two-Round Adversarial Trading Committee
+
+The committee layer is intentionally structured and bounded:
+
+1. Specialist agents produce independent analysis first.
+2. `node_build_evidence_package` consolidates the specialist output into a normalized evidence package.
+3. Round 1 opening cases are produced by the bull and bear agents in parallel.
+4. Round 2 rebuttals respond point-by-point to the opposite opening case.
+5. Final positions state whether each side still stands by its view or downgrades to observe-only / no-trade.
+6. The chair agent arbitrates the final bias, actionability, and trade plan.
+7. A rule-based validator checks the chair decision, and a repair agent can make one or two conservative corrections if needed.
+
+All committee reasoning must stay inside the evidence package. Committee prompts are loaded from the Prompt Registry and are not hard-coded in Python.
+
+## Prompt Registry / Prompt Template Management Layer
+
+The Prompt Registry stores committee prompts in the database with:
+
+- versioned prompt keys
+- English runtime prompt text for the LLM
+- Chinese maintenance translations for review and auditing
+- active-version lookup
+- prompt metadata such as prompt type, node name, model family, and output schema reference
+
+This makes committee prompts easier to review, safer to update, and simpler to trace back to the exact version used for a given research run.
 
 ---
 
@@ -75,18 +106,23 @@ Multi-Agent 预测分析看板 is an open-source **LangGraph** project for multi
 ```mermaid
 flowchart LR
   A[TradingView / News / CFTC / Polymarket / Macro data] --> B[Multi-agent analysis]
-  B --> C[Forecast aggregation]
-  C --> D[Dashboard display]
-  C --> E[Persist research results]
-  E --> F[Historical feedback loop]
+  B --> C[Evidence package]
+  C --> D[Two-round trading committee]
+  D --> E[Chair arbitration]
+  E --> F[Rule validation and repair]
+  F --> G[Forecast aggregation and persistence]
+  G --> H[Dashboard display]
+  G --> I[Historical feedback loop]
 ```
 
 1. Load local market data and the latest quote snapshot
 2. Compute technical indicators and structural signals
 3. Run the analysis agents by domain
-4. Let the `forecast` node combine all opinions into a structured prediction
-5. Persist the research run for later review and feedback evaluation
-6. Render the latest result in the frontend dashboard
+4. Consolidate specialist outputs into an evidence package
+5. Run the two-round adversarial trading committee
+6. Validate and repair the chair decision when needed
+7. Persist the final structured forecast for later review and feedback evaluation
+8. Render the latest result in the frontend dashboard
 
 ---
 

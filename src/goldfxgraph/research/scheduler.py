@@ -9,6 +9,7 @@ from goldfxgraph.packages.common.settings import GoldFXGraphSettings
 from goldfxgraph.persistence.repositories import ForecastRepository
 from goldfxgraph.schemas.forecast import SchedulerRunStatus
 from goldfxgraph.workflow.executor import run_forecast_workflow
+from goldfxgraph.workflow.nodes import MarketDataFreshnessError
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +62,22 @@ class ResearchScheduler:
                     status="success",
                     completed_at=datetime.now(UTC),
                 )
+            except MarketDataFreshnessError as exc:
+                last_error = str(exc) or "market data freshness check failed"
+                logger.error("research scheduler cycle failed: %s", last_error)
+                await self.repository.mark_run_failed(run.id, last_error)
+                await self.repository.update_scheduler_run_stage(
+                    scheduler_run.id,
+                    current_stage="failed",
+                    agent_statuses=_failed_agent_statuses(),
+                    agent_diagnostics=[],
+                    status="failed",
+                    last_error=last_error,
+                    completed_at=datetime.now(UTC),
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.exception("research scheduler cycle failed")
+                await self.repository.mark_run_failed(run.id, str(exc) or "Research scheduler failed")
                 await self.repository.update_scheduler_run_stage(
                     scheduler_run.id,
                     current_stage="failed",
