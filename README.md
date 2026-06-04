@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README.zh-CN.md)
 
-![Multi-Agent 预测分析看板 overview map](docs/assets/readme-agent-map-sketch.png)
+![Multi-Agent forecast overview map](docs/assets/readme-agent-map-sketch-en.png)
 
 Multi-Agent 预测分析看板 is an open-source **LangGraph** project for multi-agent XAU/USD research. It combines real-time gold prices, historical daily bars, news, macro data, alternative signals, and risk analysis into a coordinated workflow that produces structured entries, take-profit / stop-loss levels, time-window outlooks, and a final research conclusion.
 
@@ -105,24 +105,44 @@ This makes committee prompts easier to review, safer to update, and simpler to t
 
 ```mermaid
 flowchart LR
-  A[TradingView / News / CFTC / Polymarket / Macro data] --> B[Multi-agent analysis]
-  B --> C[Evidence package]
-  C --> D[Two-round trading committee]
-  D --> E[Chair arbitration]
-  E --> F[Rule validation and repair]
-  F --> G[Forecast aggregation and persistence]
-  G --> H[Dashboard display]
-  G --> I[Historical feedback loop]
+  A[TradingView / News / CFTC / Polymarket / Macro data] --> B[Load market data and latest quote]
+  B --> C[Compute technical indicators]
+  C --> D[Run specialist agents]
+  D --> E[Build evidence package]
+  P[Prompt registry / prompt versions] -.-> G
+  P -.-> H
+  P -.-> I
+
+  subgraph S[Two-round committee debate]
+    direction LR
+    E --> G{Branch into bull and bear tracks}
+    G --> H1[Bull opening]
+    G --> I1[Bear opening]
+    H1 --> H2[Bull rebuttal]
+    I1 --> I2[Bear rebuttal]
+    H2 --> H3[Bull final position]
+    I2 --> I3[Bear final position]
+    H3 --> J[Chair arbitration]
+    I3 --> J
+  end
+
+  J --> K[Validate and repair if needed]
+  K --> L[Persist forecast and committee trace]
+  L --> M[Display in dashboard]
+  L --> N[Historical feedback loop]
 ```
 
 1. Load local market data and the latest quote snapshot
 2. Compute technical indicators and structural signals
-3. Run the analysis agents by domain
+3. Run the specialist agents by domain
 4. Consolidate specialist outputs into an evidence package
-5. Run the two-round adversarial trading committee
-6. Validate and repair the chair decision when needed
-7. Persist the final structured forecast for later review and feedback evaluation
-8. Render the latest result in the frontend dashboard
+5. Branch into the committee debate after the evidence package is ready
+6. Run bull and bear opening, rebuttal, and final-position tracks
+7. Let the chair agent arbitrate the final research posture
+8. Validate the decision and apply bounded repair if required
+9. Persist the structured forecast and committee trace for later review
+10. Render the latest result in the frontend dashboard
+11. Feed the result into the historical feedback loop
 
 ---
 

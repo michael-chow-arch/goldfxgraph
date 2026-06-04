@@ -105,24 +105,44 @@ Prompt Registry 会把委员会相关 prompt 存进数据库，并保留：
 
 ```mermaid
 flowchart LR
-  A[TradingView / News / CFTC / Polymarket / 宏观数据] --> B[多智能体分析]
-  B --> C[证据包]
-  C --> D[两轮对抗式交易委员会]
-  D --> E[主席仲裁]
-  E --> F[规则校验与修复]
-  F --> G[forecast 汇总与持久化]
-  G --> H[Dashboard 展示]
-  G --> I[历史反馈闭环]
+  A[TradingView / News / CFTC / Polymarket / 宏观数据] --> B[加载市场数据和最新行情]
+  B --> C[计算技术指标]
+  C --> D[运行 specialist agents]
+  D --> E[构建 evidence package]
+  P[Prompt registry / prompt versions] -.-> G
+  P -.-> H
+  P -.-> I
+
+  subgraph S[两轮对抗式交易委员会]
+    direction LR
+    E --> G{进入多头 / 空头分枝}
+    G --> H1[多头开场]
+    G --> I1[空头开场]
+    H1 --> H2[多头反驳]
+    I1 --> I2[空头反驳]
+    H2 --> H3[多头终局]
+    I2 --> I3[空头终局]
+    H3 --> J[主席仲裁]
+    I3 --> J
+  end
+
+  J --> K[规则校验与必要修复]
+  K --> L[持久化 forecast 和 committee trace]
+  L --> M[Dashboard 展示]
+  L --> N[历史反馈闭环]
 ```
 
 1. 先加载本地市场数据与最新行情快照
 2. 再计算技术指标和结构信号
-3. 然后按领域依次运行多个分析 agent
+3. 然后按领域运行 specialist agents
 4. 先把 specialist 输出汇总成 evidence package
-5. 再由两轮对抗式交易委员会进行开场、反驳、终局和仲裁
-6. 然后通过规则校验和必要的保守修复
-7. 最后生成结构化 forecast 并持久化
-8. 前端 Dashboard 读取最新结果并实时展示
+5. 在证据包准备完成后进入委员会分枝
+6. 多头和空头分别完成开场、反驳和终局
+7. 接着由主席 agent 仲裁最终研究立场
+8. 再做规则校验，必要时执行有界修复
+9. 最后持久化结构化 forecast 和 committee trace
+10. 前端 Dashboard 读取最新结果并实时展示
+11. 将结果回流到历史反馈闭环
 
 ---
 
