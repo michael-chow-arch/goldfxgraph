@@ -110,8 +110,12 @@ flowchart LR
   C --> D[运行 specialist agents]
   D --> E[构建 evidence package]
   P[Prompt registry / prompt versions] -.-> G
-  P -.-> H
-  P -.-> I
+  P -.-> H1
+  P -.-> I1
+  P -.-> H2
+  P -.-> I2
+  P -.-> H3
+  P -.-> I3
 
   subgraph S[两轮对抗式交易委员会]
     direction LR

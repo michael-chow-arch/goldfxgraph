@@ -110,8 +110,12 @@ flowchart LR
   C --> D[Run specialist agents]
   D --> E[Build evidence package]
   P[Prompt registry / prompt versions] -.-> G
-  P -.-> H
-  P -.-> I
+  P -.-> H1
+  P -.-> I1
+  P -.-> H2
+  P -.-> I2
+  P -.-> H3
+  P -.-> I3
 
   subgraph S[Two-round committee debate]
     direction LR
