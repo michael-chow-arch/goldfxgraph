@@ -1,10 +1,10 @@
-# Multi-Agent 预测分析看板
+# Multi-Agent Forecast Dashboard
 
 [English](README.md) | [中文](README.zh-CN.md)
 
 ![Multi-Agent forecast overview map](docs/assets/readme-agent-map-sketch-en.png)
 
-Multi-Agent 预测分析看板 is an open-source **LangGraph** project for multi-agent XAU/USD research. It combines real-time gold prices, historical daily bars, news, macro data, alternative signals, and risk analysis into a coordinated workflow that produces structured entries, take-profit / stop-loss levels, time-window outlooks, and a final research conclusion.
+Multi-Agent Forecast Dashboard is an open-source **LangGraph** project for multi-agent XAU/USD research. It combines real-time gold prices, historical daily bars, news, macro data, alternative signals, and risk analysis into a coordinated workflow that produces structured entries, take-profit / stop-loss levels, time-window outlooks, and a final research conclusion.
 
 It now also includes a **Two-Round Adversarial Trading Committee** layer and a **Prompt Registry / Prompt Template Management Layer** for the committee agents. The committee layer turns specialist analysis into an evidence package, runs a two-round bull vs. bear debate, and lets a chair agent arbitrate the final research posture. The prompt registry stores versioned English runtime prompts alongside Chinese maintenance translations so the committee prompts stay auditable, reviewable, and easy to evolve.
 
@@ -15,11 +15,11 @@ It now also includes a **Two-Round Adversarial Trading Committee** layer and a *
 ## Preview
 
 <p align="center">
-  <img src="docs/assets/readme-dashboard-overview.png" alt="Multi-Agent 预测分析看板 overview" width="100%" />
+  <img src="docs/assets/readme-dashboard-overview.png" alt="Multi-Agent Forecast Dashboard overview" width="100%" />
 </p>
 
 <p align="center">
-  <img src="docs/assets/readme-dashboard-details.png" alt="Multi-Agent 预测分析看板 details" width="100%" />
+  <img src="docs/assets/readme-dashboard-details.png" alt="Multi-Agent Forecast Dashboard details" width="100%" />
 </p>
 
 <p align="center"><strong>黄金日线结构</strong></p>
@@ -110,8 +110,12 @@ flowchart LR
   C --> D[Run specialist agents]
   D --> E[Build evidence package]
   P[Prompt registry / prompt versions] -.-> G
-  P -.-> H
-  P -.-> I
+  P -.-> H1
+  P -.-> I1
+  P -.-> H2
+  P -.-> I2
+  P -.-> H3
+  P -.-> I3
 
   subgraph S[Two-round committee debate]
     direction LR
@@ -212,7 +216,7 @@ The frontend runs on [http://localhost:5173](http://localhost:5173) and talks to
 
 ## Disclaimer
 
-Multi-Agent 预测分析看板 is not a trading system.
+Multi-Agent Forecast Dashboard is not a trading system.
 
 This project does not provide financial advice, investment recommendations, trading signals, or automated execution. All outputs are for research, learning, and workflow exploration only.
 
