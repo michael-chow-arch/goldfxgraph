@@ -24,17 +24,17 @@
 
     <div
       v-if="chartStats"
-      class="market-candle-chart__stats mt-4 grid gap-0 sm:grid-cols-2 xl:grid-cols-4 sm:divide-x sm:divide-y sm:divide-slate-200 xl:divide-y-0"
+      class="market-candle-chart__stats market-candle-chart__grid-divider mt-4 grid gap-0 sm:grid-cols-2 xl:grid-cols-4 sm:divide-x sm:divide-y xl:divide-y-0"
     >
       <div class="market-candle-chart__stat">
         <p class="metric-label">较前收盘涨跌</p>
-        <p class="market-candle-chart__stat-value" :class="chartStats.change >= 0 ? 'text-emerald-900' : 'text-rose-900'">
+        <p class="market-candle-chart__stat-value" :class="chartStats.change >= 0 ? 'market-candle-chart__stat-value--positive' : 'market-candle-chart__stat-value--negative'">
           {{ formatSignedPrice(chartStats.change) }} / {{ formatPercent(chartStats.changePct) }}
         </p>
       </div>
       <div class="market-candle-chart__stat">
         <p class="metric-label">本日开收</p>
-        <p class="market-candle-chart__stat-value" :class="chartStats.openCloseChange >= 0 ? 'text-emerald-900' : 'text-rose-900'">
+        <p class="market-candle-chart__stat-value" :class="chartStats.openCloseChange >= 0 ? 'market-candle-chart__stat-value--positive' : 'market-candle-chart__stat-value--negative'">
           {{ formatSignedPrice(chartStats.openCloseChange) }} / {{ formatPercent(chartStats.openCloseChangePct) }}
         </p>
       </div>
@@ -46,18 +46,18 @@
         <p class="metric-label">收盘形态</p>
         <p
           class="market-candle-chart__stat-value"
-          :class="chartStats.trendLabel === '阳线' ? 'text-emerald-800' : 'text-rose-800'"
+          :class="chartStats.trendLabel === '阳线' ? 'market-candle-chart__stat-value--positive' : 'market-candle-chart__stat-value--negative'"
         >
           {{ chartStats.trendLabel }}
         </p>
       </div>
     </div>
 
-    <div v-if="bars.length === 0" class="metric-card metric-card--empty mt-4 text-sm text-slate-200/60">
+    <div v-if="bars.length === 0" class="metric-card metric-card--empty market-candle-chart__empty">
       暂无可用的黄金日线数据。
     </div>
 
-      <div class="market-candle-chart__metrics mt-4 grid gap-0 sm:grid-cols-2 xl:grid-cols-4 sm:divide-x sm:divide-y sm:divide-slate-200 xl:divide-y-0">
+      <div class="market-candle-chart__metrics market-candle-chart__grid-divider mt-4 grid gap-0 sm:grid-cols-2 xl:grid-cols-4 sm:divide-x sm:divide-y xl:divide-y-0">
         <div class="market-candle-chart__metric">
           <p class="metric-label">最近收盘</p>
           <p class="metric-value mt-1">{{ latestBar ? formatPrice(latestBar.close) : "—" }}</p>
@@ -89,21 +89,21 @@
             >
               <defs>
                 <radialGradient id="candle-canvas-glow" cx="50%" cy="22%" r="78%">
-                  <stop offset="0%" stop-color="rgba(56, 189, 248, 0.16)" />
-                  <stop offset="55%" stop-color="rgba(245, 158, 11, 0.06)" />
-                  <stop offset="100%" stop-color="rgba(15, 23, 42, 0)" />
+                  <stop offset="0%" stop-color="var(--goldfx-chart-canvas-glow-start)" />
+                  <stop offset="55%" stop-color="var(--goldfx-chart-canvas-glow-mid)" />
+                  <stop offset="100%" stop-color="var(--goldfx-chart-canvas-glow-end)" />
                 </radialGradient>
                 <linearGradient id="candle-rise-gradient" x1="0%" y1="0%" x2="0%" y2="100%">
-                  <stop offset="0%" stop-color="#67e8f9" stop-opacity="0.96" />
-                  <stop offset="100%" stop-color="#22c55e" stop-opacity="0.72" />
+                  <stop offset="0%" stop-color="var(--goldfx-chart-rise-start)" stop-opacity="0.96" />
+                  <stop offset="100%" stop-color="var(--goldfx-chart-rise-end)" stop-opacity="0.72" />
                 </linearGradient>
                 <linearGradient id="candle-fall-gradient" x1="0%" y1="0%" x2="0%" y2="100%">
-                  <stop offset="0%" stop-color="#fb7185" stop-opacity="0.96" />
-                  <stop offset="100%" stop-color="#f97316" stop-opacity="0.68" />
+                  <stop offset="0%" stop-color="var(--goldfx-chart-fall-start)" stop-opacity="0.96" />
+                  <stop offset="100%" stop-color="var(--goldfx-chart-fall-end)" stop-opacity="0.68" />
                 </linearGradient>
                 <linearGradient id="candle-latest-gradient" x1="0%" y1="0%" x2="0%" y2="100%">
-                  <stop offset="0%" stop-color="#fde68a" stop-opacity="0.98" />
-                  <stop offset="100%" stop-color="#f59e0b" stop-opacity="0.88" />
+                  <stop offset="0%" stop-color="var(--goldfx-chart-latest-start)" stop-opacity="0.98" />
+                  <stop offset="100%" stop-color="var(--goldfx-chart-latest-end)" stop-opacity="0.88" />
                 </linearGradient>
                 <filter id="candle-glow" x="-40%" y="-40%" width="180%" height="180%">
                   <feGaussianBlur stdDeviation="4" result="blur" />
@@ -121,7 +121,7 @@
                 :x2="plotRight"
                 :y1="paddingTop + plotHeight / 2"
                 :y2="paddingTop + plotHeight / 2"
-                stroke="rgba(148, 163, 184, 0.08)"
+                stroke="var(--goldfx-chart-grid)"
                 stroke-width="1"
                 stroke-dasharray="6 10"
               />
@@ -132,18 +132,17 @@
                   :x2="plotRight"
                   :y1="currentPriceY"
                   :y2="currentPriceY"
-                  stroke="rgba(34, 211, 238, 0.72)"
+                  stroke="var(--goldfx-chart-current-line)"
                   stroke-width="1.5"
                   stroke-dasharray="8 8"
                 />
-                <circle :cx="plotRight - 6" :cy="currentPriceY" r="4" fill="#67e8f9" opacity="0.95" />
+                <circle :cx="plotRight - 6" :cy="currentPriceY" r="4" fill="var(--goldfx-chart-current-label)" opacity="0.95" />
                 <text
                   :x="plotRight + 16"
                   :y="currentPriceY + 4"
-                  class="fill-cyan-100/88"
-                  font-size="10"
-                  font-family="Fira Code, monospace"
-                >
+                    class="market-candle-chart__svg-value market-candle-chart__svg-value--accent"
+                    font-size="10"
+                  >
                   当前价 {{ formatPrice(currentPriceDisplayValue) }}
                 </text>
               </g>
@@ -153,7 +152,7 @@
                 :x2="plotRight + 10"
                 :y1="paddingTop"
                 :y2="paddingTop + plotHeight"
-                stroke="rgba(148, 163, 184, 0.08)"
+                stroke="var(--goldfx-chart-grid)"
                 stroke-width="1"
               />
 
@@ -163,15 +162,14 @@
                   :x2="plotRight"
                   :y1="label.y"
                   :y2="label.y"
-                  stroke="rgba(148, 163, 184, 0.045)"
+                  stroke="var(--goldfx-chart-grid-soft)"
                   stroke-width="1"
                 />
                 <text
                   :x="plotRight + 16"
                   :y="label.y + 4"
-                  class="fill-slate-300/58"
+                    class="market-candle-chart__svg-label"
                   font-size="10"
-                  font-family="Fira Code, monospace"
                 >
                   {{ label.text }}
                 </text>
@@ -197,7 +195,7 @@
                   :width="candle.bodyWidth"
                   :height="candle.bodyHeight"
                   :fill="candle.isLatest ? 'url(#candle-latest-gradient)' : candle.isBullish ? 'url(#candle-rise-gradient)' : 'url(#candle-fall-gradient)'"
-                  :stroke="candle.isLatest ? 'rgba(251, 191, 36, 0.98)' : 'rgba(255,255,255,0.05)'"
+                  :stroke="candle.isLatest ? 'var(--goldfx-chart-latest-stroke)' : 'var(--goldfx-chart-candle-border)'"
                   :stroke-width="candle.isLatest ? 2 : 1"
                   :filter="candle.isLatest ? 'url(#candle-glow)' : undefined"
                   rx="6"
@@ -208,7 +206,7 @@
                   :cx="candle.centerX"
                   :cy="candle.bodyY"
                   r="4"
-                  fill="#fde68a"
+                  fill="var(--goldfx-chart-latest-start)"
                   opacity="0.9"
                 />
                 <text
@@ -216,9 +214,8 @@
                   :x="candle.centerX"
                   :y="paddingTop + plotHeight + 28"
                   text-anchor="middle"
-                  class="fill-slate-300/70"
+                  class="market-candle-chart__svg-label"
                   font-size="10"
-                  font-family="Fira Code, monospace"
                 >
                   {{ candle.dateLabel }}
                 </text>
@@ -227,20 +224,20 @@
 
             <div
               v-if="hoveredCandle"
-              class="market-candle-chart__tooltip pointer-events-none absolute z-20 rounded-2xl border border-slate-300/15 bg-slate-950/92 px-4 py-3 shadow-[0_20px_45px_-24px_rgba(0,0,0,0.72)] backdrop-blur-xl"
+              class="market-candle-chart__tooltip-shell"
               :style="hoverTooltipStyle"
             >
               <div class="flex items-start justify-between gap-3">
                 <div class="space-y-1">
-                  <p class="font-mono text-[11px] tracking-[0.18em] text-slate-300/55">日线详情</p>
-                  <p class="text-sm font-semibold text-slate-50">{{ hoveredCandle.dateLabel }}</p>
+                  <p class="market-candle-chart__tooltip-title">日线详情</p>
+                  <p class="market-candle-chart__tooltip-date">{{ hoveredCandle.dateLabel }}</p>
                 </div>
-                <span class="status-pill status-pill--neutral text-[10px] tracking-[0.16em]">
+                <span class="status-pill status-pill--neutral market-candle-chart__badge">
                   {{ hoveredCandle.isLatest ? "最新" : hoveredCandle.isBullish ? "阳线" : "阴线" }}
                 </span>
               </div>
 
-              <div class="mt-3 grid grid-cols-2 gap-2 text-xs">
+              <div class="market-candle-chart__tooltip-grid mt-3 grid grid-cols-2 gap-2">
                 <div class="market-candle-chart__tooltip-row">
                   <span class="market-candle-chart__tooltip-label">开盘</span>
                   <span class="market-candle-chart__tooltip-value">{{ formatPrice(hoveredCandle.open) }}</span>
@@ -251,15 +248,15 @@
                 </div>
                 <div class="market-candle-chart__tooltip-row">
                   <span class="market-candle-chart__tooltip-label">最高</span>
-                  <span class="market-candle-chart__tooltip-value text-emerald-200">{{ formatPrice(hoveredCandle.high) }}</span>
+                  <span class="market-candle-chart__tooltip-value market-candle-chart__tooltip-value--positive">{{ formatPrice(hoveredCandle.high) }}</span>
                 </div>
                 <div class="market-candle-chart__tooltip-row">
                   <span class="market-candle-chart__tooltip-label">最低</span>
-                  <span class="market-candle-chart__tooltip-value text-rose-200">{{ formatPrice(hoveredCandle.low) }}</span>
+                  <span class="market-candle-chart__tooltip-value market-candle-chart__tooltip-value--negative">{{ formatPrice(hoveredCandle.low) }}</span>
                 </div>
                 <div class="market-candle-chart__tooltip-row col-span-2">
                   <span class="market-candle-chart__tooltip-label">涨跌</span>
-                  <span class="market-candle-chart__tooltip-value" :class="hoveredCandle.change >= 0 ? 'text-emerald-200' : 'text-rose-200'">
+                  <span class="market-candle-chart__tooltip-value" :class="hoveredCandle.change >= 0 ? 'market-candle-chart__tooltip-value--positive' : 'market-candle-chart__tooltip-value--negative'">
                     {{ formatSignedPrice(hoveredCandle.change) }} / {{ formatPercent(hoveredCandle.changePct) }}
                   </span>
                 </div>
