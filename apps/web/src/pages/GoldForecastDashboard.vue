@@ -1,36 +1,29 @@
 <template>
-  <main class="min-h-screen text-slate-50" :class="marketSessionPageClass">
+  <main class="text-ui-surface min-h-screen" :class="marketSessionPageClass">
     <div class="dashboard-shell mx-auto min-h-screen w-full max-w-[1600px] px-4 py-4 sm:px-6 lg:px-8 lg:py-6" :class="marketSessionPageClass">
       <header class="dashboard-panel hero-panel relative overflow-hidden rounded-[32px] px-5 py-6 sm:px-6 sm:py-7 lg:px-8 lg:py-8" :class="marketSessionPageClass">
-        <div
-          class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(46,230,107,0.18),transparent_22%),radial-gradient(circle_at_16%_18%,rgba(245,197,66,0.16),transparent_24%),radial-gradient(circle_at_84%_12%,rgba(39,199,255,0.08),transparent_20%)]"
-        />
+        <div class="hero-panel__accent-overlay" />
 
         <div class="relative space-y-6">
-          <div class="flex flex-wrap items-center gap-3">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="flex flex-wrap items-center gap-3">
             <span class="status-pill" :class="statusPillClass">{{ stateLabel }}</span>
             <span class="status-pill" :class="marketSessionClass">{{ marketSessionLabel }}</span>
+            </div>
           </div>
 
-          <div class="space-y-4">
-            <h1 class="display-title text-balance text-3xl font-semibold tracking-tight text-[#eff7ff] sm:text-4xl lg:text-5xl">
-              Multi-Agent 预测分析看板
-            </h1>
-            <p class="max-w-3xl text-xs leading-6 text-slate-600 sm:text-sm">
-              页面会自动轮询最新研究结果和调度状态，当前显示内容始终来自最新一次可用快照。
-            </p>
-          </div>
-
-          <div v-if="forecast" class="flex flex-wrap gap-3">
+          <div v-if="forecast" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
             <span v-for="chip in heroChips" :key="chip.label" class="data-chip">
               <span class="data-chip__label">{{ chip.label }}</span>
               <span class="data-chip__value">{{ chip.value }}</span>
             </span>
           </div>
-          <div v-else class="flex flex-wrap gap-3">
+          <div v-else class="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
             <span class="data-chip data-chip--placeholder">等待最新研究数据</span>
             <span class="data-chip data-chip--placeholder">等待方向信号</span>
             <span class="data-chip data-chip--placeholder">等待置信度快照</span>
+            <span class="data-chip data-chip--placeholder">等待执行计划</span>
+            <span class="data-chip data-chip--placeholder">等待验证状态</span>
           </div>
 
           <div v-if="forecast" class="grid gap-4">
@@ -42,7 +35,7 @@
                     <p class="price-display">
                       {{ forecast ? formatPrice(forecast.current_price) : "—" }}
                     </p>
-                    <p class="text-xs tracking-[0.18em] text-slate-600 sm:text-sm">
+                    <p class="text-ui-body-sm">
                       XAUUSD · {{ forecast ? forecast.symbol : "等待 TradingView 快照" }}
                     </p>
                   </div>
@@ -59,7 +52,7 @@
                     </span>
                   </div>
 
-                  <p v-if="statusErrorMessage" class="mt-3 text-xs leading-6 text-amber-100/80">
+                  <p v-if="statusErrorMessage" class="mt-3 text-ui-body-sm text-ui-warning">
                     {{ statusErrorMessage }}
                   </p>
 
@@ -79,13 +72,13 @@
                   <div class="flex items-center justify-between gap-3">
                     <div class="space-y-1">
                       <p class="metric-label">当日方向</p>
-                      <span class="text-[11px] tracking-[0.18em] text-slate-500">核心结论</span>
+                      <span class="text-ui-meta">核心结论</span>
                     </div>
-                    <span class="analysis-badge analysis-badge--accent">主判断</span>
+                    <span class="metric-label">主判断</span>
                   </div>
                   <div class="mt-3 flex flex-wrap items-center gap-3">
-                    <span class="status-pill" :class="directionClass">{{ directionLabel }}</span>
-                    <span class="confidence-chip">
+                    <span class="status-pill hero-summary-direction-pill" :class="directionClass">{{ directionLabel }}</span>
+                    <span class="confidence-chip hero-summary-confidence-chip">
                       <span class="confidence-chip__label">置信度</span>
                       <span class="confidence-chip__value">{{ forecast ? formatPercent(forecast.confidence_score) : "0%" }}</span>
                     </span>
@@ -106,7 +99,7 @@
                       <span>100%</span>
                     </div>
                   </div>
-                  <div class="mt-4 space-y-2 text-sm leading-7 text-slate-700">
+                  <div class="mt-4 space-y-2 text-ui-body-md">
                     <p class="hero-summary-note">主判断：{{ directionLabel }}，置信度 {{ forecast ? formatPercent(forecast.confidence_score) : "0%" }}。</p>
                     <p v-if="forecast" class="hero-summary-note">持有周期：{{ forecast.holding_period }}</p>
                   </div>
@@ -116,9 +109,9 @@
                   <div class="flex items-center justify-between gap-3">
                     <div class="space-y-1">
                       <p class="metric-label">实时元数据</p>
-                      <span class="text-[11px] tracking-[0.18em] text-slate-500">来源与时间</span>
+                      <span class="text-ui-meta">来源与时间</span>
                     </div>
-                    <span class="analysis-badge analysis-badge--accent">元数据</span>
+                    <span class="metric-label">元数据</span>
                   </div>
                   <dl class="mt-4 space-y-3">
                     <div v-for="metric in heroMetaCards" :key="metric.label" class="hero-summary-row">
@@ -135,119 +128,92 @@
         </div>
       </header>
 
-      <section
+      <DashboardStateBanner
         v-if="isLoading"
-        class="dashboard-panel mt-5 rounded-[28px] px-5 py-8 sm:px-6"
-        aria-live="polite"
-        role="status"
+        variant="loading"
+        eyebrow="加载中"
+        title="正在加载最新 TradingView 研究结果"
+        :message="LOADING_FORECAST_MESSAGE"
+        detail="加载完成后会自动刷新本页内容。"
       >
-        <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div class="space-y-2">
-            <p class="panel-title">加载中</p>
-            <h2 class="section-heading">正在加载最新 TradingView 研究结果</h2>
-            <p class="section-copy max-w-2xl">
-              {{ LOADING_FORECAST_MESSAGE }}加载完成后会自动刷新本页内容。
-            </p>
+        <template #actions>
+          <div class="hero-status-strip">
+            <span class="hero-status-strip__dot hero-status-strip__dot--loading" />
+            <span class="text-ui-meta text-ui-surface-soft">等待 TradingView 快照</span>
           </div>
-          <div class="flex items-center gap-3 rounded-full border border-slate-400/15 bg-[#0f172a]/80 px-4 py-2">
-            <span class="h-2.5 w-2.5 animate-pulse rounded-full bg-sky-400" />
-            <span class="font-mono text-xs tracking-[0.18em] text-slate-200/70">等待 TradingView 快照</span>
-          </div>
-        </div>
-      </section>
+        </template>
+      </DashboardStateBanner>
 
-      <section
+      <DashboardStateBanner
         v-else-if="errorMessage"
-        class="dashboard-panel mt-5 rounded-[28px] border-slate-400/15 px-5 py-8 sm:px-6"
-        aria-live="assertive"
-        role="alert"
-      >
-        <div class="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
-          <div class="space-y-2">
-            <p class="panel-title text-sky-300">加载失败</p>
-            <h2 class="section-heading">TradingView 实时行情暂不可用</h2>
-            <p class="section-copy max-w-2xl">{{ errorMessage }}</p>
-            <p class="section-copy max-w-2xl text-slate-600">系统会继续自动轮询，等待下一次可用快照恢复展示。</p>
-          </div>
-        </div>
-      </section>
+        variant="error"
+        eyebrow="加载失败"
+        title="TradingView 实时行情暂不可用"
+        :message="errorMessage"
+        detail="系统会继续自动轮询，等待下一次可用快照恢复展示。"
+      />
 
-      <section
+      <DashboardStateBanner
         v-else-if="!forecast"
-        class="dashboard-panel mt-5 rounded-[28px] px-5 py-8 sm:px-6"
-        aria-live="polite"
-        role="status"
-      >
-        <div class="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
-          <div class="space-y-2">
-            <p class="panel-title">暂无结果</p>
-            <h2 class="section-heading">尚无可展示的 TradingView 研究快照</h2>
-            <p class="section-copy max-w-2xl">{{ EMPTY_FORECAST_MESSAGE }}</p>
-          </div>
-        </div>
-      </section>
+        variant="empty"
+        eyebrow="暂无结果"
+        title="尚无可展示的 TradingView 研究快照"
+        :message="EMPTY_FORECAST_MESSAGE"
+      />
 
       <div v-if="forecast" class="mt-5 space-y-5">
         <section class="dashboard-panel rounded-[28px] px-5 py-6 sm:px-6 lg:px-8">
-          <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-            <div class="space-y-2">
-              <p class="panel-title">结构化交易字段</p>
-              <h2 class="section-heading">入场、止盈、止损与持有框架</h2>
-              <p class="section-copy max-w-3xl">
-                根据分析和预测，偏向当日的入场策略。
-              </p>
-            </div>
-            <span class="font-mono text-[11px] tracking-[0.18em] text-slate-500">trade setup</span>
-          </div>
+          <DashboardSectionHeader
+            eyebrow="Execution Plan"
+            title="入场、止盈、止损与持有框架"
+            description="这里直接给出可执行的研究结论，便于快速对齐日内计划与中长期持有思路。"
+            badge="trade setup"
+          />
 
           <div class="mt-4 grid gap-4 lg:grid-cols-3">
             <article v-for="card in tradeLevelCards" :key="card.label" class="trade-field-row">
-              <span class="analysis-badge analysis-badge--slate">{{ card.label }}</span>
+              <span class="metric-label">{{ card.label }}</span>
               <p class="trade-field-row__value">{{ card.value }}</p>
             </article>
           </div>
 
           <div class="mt-4 grid gap-4 xl:grid-cols-3">
             <article class="trade-field-row">
-              <span class="analysis-badge analysis-badge--slate">风险回报比</span>
+              <span class="metric-label">风险回报比</span>
               <p class="trade-field-row__value">{{ riskRewardRatio }}</p>
             </article>
             <article class="trade-field-row">
-              <span class="analysis-badge analysis-badge--slate">持有周期</span>
+              <span class="metric-label">持有周期</span>
               <p class="trade-field-row__value">{{ forecast.holding_period }}</p>
             </article>
             <article class="trade-field-row trade-field-row--stacked">
-              <span class="analysis-badge analysis-badge--slate">日内 / 中长期</span>
+              <span class="metric-label">日内 / 中长期</span>
               <div class="summary-flat-row__body">
                 <p class="summary-flat-row__text leading-7">{{ forecast.intraday_action }}</p>
-                <p class="mt-3 text-sm leading-7 text-slate-700">{{ forecast.long_term_action }}</p>
+                <p class="mt-3 text-ui-body-md">{{ forecast.long_term_action }}</p>
               </div>
             </article>
           </div>
         </section>
 
         <section class="dashboard-panel rounded-[28px] p-5 sm:p-6">
-          <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-            <div class="space-y-2">
-              <p class="panel-title">Evidence Package Summary</p>
-              <h2 class="section-heading">委员会证据包</h2>
-              <p class="section-copy max-w-3xl">
-                先看 specialist 证据，再进入对抗式辩论。所有观点都必须回到这里的结构化事实。
-              </p>
-            </div>
-            <span class="font-mono text-[11px] tracking-[0.18em] text-slate-500">evidence package</span>
-          </div>
+          <DashboardSectionHeader
+            eyebrow="Research Evidence"
+            title="研究证据包与委员会输入"
+            description="先看 specialist 证据，再进入对抗式辩论。所有观点都必须回到这里的结构化事实。"
+            badge="evidence package"
+          />
 
           <div v-if="committeeDebateCards.length > 0" class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             <article
               v-for="item in committeeDebateCards"
               :key="item.id"
-              class="metric-card metric-card--soft border border-slate-400/10 bg-[#0f172a]/80"
+              class="metric-card metric-card--soft surface-card-dark--soft"
             >
               <div class="flex flex-wrap items-start justify-between gap-3">
                 <div class="space-y-1">
-                  <p class="font-mono text-sm font-semibold text-slate-50">{{ item.title }}</p>
-                  <p class="text-[11px] tracking-[0.18em] text-slate-300/50">{{ item.dataFreshness }}</p>
+                  <p class="text-ui-card-title">{{ item.title }}</p>
+                  <p class="text-ui-meta text-ui-surface-muted">{{ item.dataFreshness }}</p>
                 </div>
                 <span
                   class="status-pill"
@@ -257,90 +223,86 @@
                 </span>
               </div>
 
-              <div class="mt-4 flex flex-wrap gap-2">
-                <span class="analysis-badge analysis-badge--accent">{{ item.signal }}</span>
-                <span class="analysis-badge analysis-badge--slate">置信度 {{ item.confidence }}</span>
+              <div class="mt-4 flex flex-wrap gap-x-5 gap-y-2">
+                <p class="text-ui-meta">信号 <span class="text-ui-surface-soft">{{ item.signal }}</span></p>
+                <p class="text-ui-meta">置信度 <span class="text-ui-surface-soft">{{ item.confidence }}</span></p>
               </div>
 
-              <div class="mt-4 space-y-3 text-sm leading-6 text-slate-200/80">
+              <div class="mt-4 space-y-3 text-ui-body-md">
                 <div>
-                  <p class="text-[11px] tracking-[0.18em] text-slate-300/45">关键证据</p>
+                  <p class="text-ui-meta text-ui-surface-muted">关键证据</p>
                   <p class="mt-1 whitespace-pre-line">{{ item.keyEvidence.join("；") || "—" }}</p>
                 </div>
                 <div>
-                  <p class="text-[11px] tracking-[0.18em] text-slate-300/45">风险信号</p>
+                  <p class="text-ui-meta text-ui-surface-muted">风险信号</p>
                   <p class="mt-1 whitespace-pre-line">{{ item.riskFactors.join("；") || "—" }}</p>
                 </div>
                 <div>
-                  <p class="text-[11px] tracking-[0.18em] text-slate-300/45">失效条件</p>
+                  <p class="text-ui-meta text-ui-surface-muted">失效条件</p>
                   <p class="mt-1 whitespace-pre-line">{{ item.invalidationConditions.join("；") || "—" }}</p>
                 </div>
                 <div>
-                  <p class="text-[11px] tracking-[0.18em] text-slate-300/45">重要价位</p>
+                  <p class="text-ui-meta text-ui-surface-muted">重要价位</p>
                   <p class="mt-1 whitespace-pre-line">{{ item.importantLevels.join("；") || "—" }}</p>
                 </div>
               </div>
             </article>
           </div>
 
-          <div v-else class="metric-card metric-card--empty mt-4 text-sm text-slate-300/60">
+          <div v-else class="metric-card metric-card--empty surface-card-dark--empty mt-4 text-ui-body-sm">
             当前还没有可展示的证据包。
           </div>
         </section>
 
         <section class="dashboard-panel rounded-[28px] p-5 sm:p-6">
-          <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-            <div class="space-y-2">
-              <p class="panel-title">Trading Committee Debate</p>
-              <h2 class="section-heading">两轮对抗式辩论</h2>
-              <p class="section-copy max-w-3xl">
-                Opening case 先建立最强论点，再通过 rebuttal 逐点回应对方，最后收束为最终立场。
-              </p>
-            </div>
-            <span class="font-mono text-[11px] tracking-[0.18em] text-slate-500">two-round debate</span>
-          </div>
+          <DashboardSectionHeader
+            eyebrow="Workflow Reasoning"
+            title="两轮对抗式辩论"
+            description="Opening case 先建立最强论点，再通过 rebuttal 逐点回应对方，最后收束为最终立场。"
+            badge="two-round debate"
+          />
 
           <div class="mt-4 space-y-6">
             <div>
               <div class="flex items-center justify-between gap-3">
                 <p class="metric-label">Round 1 · Opening Case</p>
-                <span class="font-mono text-[11px] tracking-[0.18em] text-slate-300/55">bull / bear</span>
+                <span class="text-ui-meta text-ui-surface-muted">bull / bear</span>
               </div>
               <div class="mt-3 grid gap-4 xl:grid-cols-2">
                 <article
                   v-for="item in committeeOpeningCases"
                   :key="`${item.side}-${item.thesis}`"
-                  class="metric-card metric-card--soft border border-slate-400/10 bg-[#0f172a]/80"
+                  class="metric-card metric-card--soft surface-card-dark--soft"
                 >
                   <div class="flex flex-wrap items-start justify-between gap-3">
                     <div class="space-y-1">
-                      <p class="font-mono text-sm font-semibold text-slate-50">{{ item.sideLabel }}</p>
-                      <p class="text-[11px] tracking-[0.18em] text-slate-300/50">{{ item.entry_zone }}</p>
+                      <p class="text-ui-card-title">{{ item.sideLabel }}</p>
+                      <p class="text-ui-meta text-ui-surface-muted">{{ item.entry_zone }}</p>
                     </div>
                     <span class="status-pill" :class="item.stanceClass">{{ DIRECTION_LABELS[item.side === 'bull' ? 'bullish' : 'bearish'] }}</span>
                   </div>
-                  <p class="mt-3 text-sm leading-6 text-slate-200/85">{{ item.thesis }}</p>
+                  <p class="mt-3 text-ui-body-md">{{ item.thesis }}</p>
                   <dl class="mt-4 grid gap-3">
                     <div class="metric-card metric-card--embedded">
                       <dt class="metric-label">止损 / 失效</dt>
-                      <dd class="mt-1 text-sm text-slate-200/80">{{ item.stop_loss_or_invalidation }}</dd>
+                      <dd class="mt-1 text-ui-body-md">{{ item.stop_loss_or_invalidation }}</dd>
                     </div>
                     <div class="metric-card metric-card--embedded">
                       <dt class="metric-label">目标区间</dt>
-                      <dd class="mt-1 text-sm text-slate-200/80">{{ item.target_zone }}</dd>
+                      <dd class="mt-1 text-ui-body-md">{{ item.target_zone }}</dd>
                     </div>
                     <div class="metric-card metric-card--embedded">
                       <dt class="metric-label">风险回报</dt>
-                      <dd class="mt-1 text-sm text-slate-200/80">{{ item.risk_reward != null ? `${item.risk_reward.toFixed(2)} R` : "—" }}</dd>
+                      <dd class="mt-1 text-ui-body-md">{{ item.risk_reward != null ? `${item.risk_reward.toFixed(2)} R` : "—" }}</dd>
                     </div>
                     <div class="metric-card metric-card--embedded">
                       <dt class="metric-label">弱点承认</dt>
-                      <dd class="mt-1 text-sm leading-6 text-slate-200/80">{{ item.weakness_acknowledged.join("；") || "—" }}</dd>
+                      <dd class="mt-1 text-ui-body-md">{{ item.weakness_acknowledged.join("；") || "—" }}</dd>
                     </div>
                   </dl>
                   <div class="mt-4 space-y-2">
-                    <p class="text-[11px] tracking-[0.18em] text-slate-300/45">支持论据</p>
-                    <p class="text-sm leading-6 text-slate-200/80">{{ item.supporting_arguments.join("；") || "—" }}</p>
+                    <p class="text-ui-meta text-ui-surface-muted">支持论据</p>
+                    <p class="text-ui-body-md">{{ item.supporting_arguments.join("；") || "—" }}</p>
                   </div>
                 </article>
               </div>
@@ -349,37 +311,37 @@
             <div>
               <div class="flex items-center justify-between gap-3">
                 <p class="metric-label">Round 2 · Rebuttal</p>
-                <span class="font-mono text-[11px] tracking-[0.18em] text-slate-300/55">逐点回应</span>
+                <span class="text-ui-meta text-ui-surface-muted">逐点回应</span>
               </div>
               <div class="mt-3 grid gap-4 xl:grid-cols-2">
                 <article
                   v-for="item in committeeRebuttals"
                   :key="`${item.side}-${item.responds_to_side}-${item.confidence_change ?? 0}`"
-                  class="metric-card metric-card--soft border border-slate-400/10 bg-[#0f172a]/80"
+                  class="metric-card metric-card--soft surface-card-dark--soft"
                 >
                   <div class="flex flex-wrap items-start justify-between gap-3">
                     <div class="space-y-1">
-                      <p class="font-mono text-sm font-semibold text-slate-50">{{ item.sideLabel }}</p>
-                      <p class="text-[11px] tracking-[0.18em] text-slate-300/50">{{ item.respondLabel }}</p>
+                      <p class="text-ui-card-title">{{ item.sideLabel }}</p>
+                      <p class="text-ui-meta text-ui-surface-muted">{{ item.respondLabel }}</p>
                     </div>
                     <span class="status-pill" :class="item.stanceClass">Rebuttal</span>
                   </div>
                   <div class="mt-4 grid gap-3">
                     <div class="metric-card metric-card--embedded">
                       <dt class="metric-label">驳斥点</dt>
-                      <dd class="mt-1 text-sm leading-6 text-slate-200/80">{{ item.rebutted_points.join("；") || "—" }}</dd>
+                      <dd class="mt-1 text-ui-body-md">{{ item.rebutted_points.join("；") || "—" }}</dd>
                     </div>
                     <div class="metric-card metric-card--embedded">
                       <dt class="metric-label">接受点</dt>
-                      <dd class="mt-1 text-sm leading-6 text-slate-200/80">{{ item.accepted_points.join("；") || "—" }}</dd>
+                      <dd class="mt-1 text-ui-body-md">{{ item.accepted_points.join("；") || "—" }}</dd>
                     </div>
                     <div class="metric-card metric-card--embedded">
                       <dt class="metric-label">计划调整</dt>
-                      <dd class="mt-1 text-sm leading-6 text-slate-200/80">{{ item.plan_adjustments.join("；") || "—" }}</dd>
+                      <dd class="mt-1 text-ui-body-md">{{ item.plan_adjustments.join("；") || "—" }}</dd>
                     </div>
                     <div class="metric-card metric-card--embedded">
                       <dt class="metric-label">置信度变化</dt>
-                      <dd class="mt-1 text-sm leading-6 text-slate-200/80">
+                      <dd class="mt-1 text-ui-body-md">
                         {{ item.confidence_change != null ? `${item.confidence_trend} (${formatSignedPnl(item.confidence_change)})` : item.confidence_trend }}
                       </dd>
                     </div>
@@ -391,37 +353,37 @@
             <div>
               <div class="flex items-center justify-between gap-3">
                 <p class="metric-label">Round 3 · Final Position</p>
-                <span class="font-mono text-[11px] tracking-[0.18em] text-slate-300/55">终局立场</span>
+                <span class="text-ui-meta text-ui-surface-muted">终局立场</span>
               </div>
               <div class="mt-3 grid gap-4 xl:grid-cols-2">
                 <article
                   v-for="item in committeeFinalPositions"
                   :key="`${item.side}-${item.confidence}`"
-                  class="metric-card metric-card--soft border border-slate-400/10 bg-[#0f172a]/80"
+                  class="metric-card metric-card--soft surface-card-dark--soft"
                 >
                   <div class="flex flex-wrap items-start justify-between gap-3">
                     <div class="space-y-1">
-                      <p class="font-mono text-sm font-semibold text-slate-50">{{ item.sideLabel }}</p>
-                      <p class="text-[11px] tracking-[0.18em] text-slate-300/50">{{ item.stance }}</p>
+                      <p class="text-ui-card-title">{{ item.sideLabel }}</p>
+                      <p class="text-ui-meta text-ui-surface-muted">{{ item.stance }}</p>
                     </div>
                     <span class="status-pill" :class="item.stanceClass">置信度 {{ formatPercent(item.confidence) }}</span>
                   </div>
                   <div class="mt-4 grid gap-3">
                     <div class="metric-card metric-card--embedded">
                       <dt class="metric-label">采纳论据</dt>
-                      <dd class="mt-1 text-sm leading-6 text-slate-200/80">{{ item.adopted_arguments.join("；") || "—" }}</dd>
+                      <dd class="mt-1 text-ui-body-md">{{ item.adopted_arguments.join("；") || "—" }}</dd>
                     </div>
                     <div class="metric-card metric-card--embedded">
                       <dt class="metric-label">放弃条件</dt>
-                      <dd class="mt-1 text-sm leading-6 text-slate-200/80">{{ item.abandon_conditions.join("；") || "—" }}</dd>
+                      <dd class="mt-1 text-ui-body-md">{{ item.abandon_conditions.join("；") || "—" }}</dd>
                     </div>
                     <div class="metric-card metric-card--embedded">
                       <dt class="metric-label">计划调整</dt>
-                      <dd class="mt-1 text-sm leading-6 text-slate-200/80">{{ item.plan_adjustments.join("；") || "—" }}</dd>
+                      <dd class="mt-1 text-ui-body-md">{{ item.plan_adjustments.join("；") || "—" }}</dd>
                     </div>
                     <div class="metric-card metric-card--embedded">
                       <dt class="metric-label">拒绝论据</dt>
-                      <dd class="mt-1 text-sm leading-6 text-slate-200/80">{{ item.rejected_arguments.join("；") || "—" }}</dd>
+                      <dd class="mt-1 text-ui-body-md">{{ item.rejected_arguments.join("；") || "—" }}</dd>
                     </div>
                   </div>
                 </article>
@@ -431,67 +393,61 @@
         </section>
 
         <section class="dashboard-panel rounded-[28px] p-5 sm:p-6">
-          <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-            <div class="space-y-2">
-              <p class="panel-title">Committee Chair Decision</p>
-              <h2 class="section-heading">主席仲裁与验证</h2>
-              <p class="section-copy max-w-3xl">
-                主席不是摘要器，而是裁决者。它综合证据包、Opening、Rebuttal 和 Final Position，输出最终 bias 和可执行性。
-              </p>
-            </div>
-            <span class="font-mono text-[11px] tracking-[0.18em] text-slate-500">chair decision</span>
-          </div>
+          <DashboardSectionHeader
+            eyebrow="Decision Control"
+            title="主席仲裁与验证"
+            description="主席不是摘要器，而是裁决者。它综合证据包、Opening、Rebuttal 和 Final Position，输出最终 bias 和可执行性。"
+            badge="chair decision"
+          />
 
           <div class="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
-            <article class="metric-card metric-card--soft border border-emerald-300/20 bg-[#0f172a]/85 p-5">
-              <div class="flex flex-wrap items-center justify-between gap-3">
-                <div class="space-y-2">
-                  <p class="font-mono text-xs tracking-[0.18em] text-slate-300/55">final bias</p>
-                  <h3 class="text-2xl font-semibold text-slate-50">{{ committeeBiasLabel }}</h3>
-                </div>
-                <div class="flex flex-wrap items-center gap-2">
-                  <span class="status-pill" :class="committeeActionabilityToneClass">{{ committeeActionabilityLabel }}</span>
-                  <span class="status-pill" :class="committeeValidationToneClass">{{ committeeValidationLabel }}</span>
-                </div>
-              </div>
+            <article class="metric-card metric-card--soft surface-card-dark--soft p-5">
+              <DashboardSectionHeader eyebrow="final bias" title="终局裁决" heading-tag="h3">
+                <template #actions>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="status-pill" :class="committeeActionabilityToneClass">{{ committeeActionabilityLabel }}</span>
+                    <span class="status-pill" :class="committeeValidationToneClass">{{ committeeValidationLabel }}</span>
+                  </div>
+                </template>
+              </DashboardSectionHeader>
 
               <div v-if="committeeTradePlan" class="mt-4 flex flex-wrap gap-2">
-                <span class="analysis-badge analysis-badge--accent">{{ committeeTradePlan.title }}</span>
-                <span class="analysis-badge analysis-badge--slate">{{ committeeTradePlan.biasLabel }}</span>
+                <span class="metric-label">{{ committeeTradePlan.title }}</span>
+                <span class="metric-label">{{ committeeTradePlan.biasLabel }}</span>
               </div>
 
               <div class="mt-4 grid gap-3 sm:grid-cols-2">
                 <div class="metric-card metric-card--embedded">
                   <dt class="metric-label">胜出方</dt>
-                  <dd class="mt-1 text-sm text-slate-200/80">{{ committeeWinningSideLabel }}</dd>
+                  <dd class="mt-1 text-ui-body-md">{{ committeeWinningSideLabel }}</dd>
                 </div>
                 <div class="metric-card metric-card--embedded">
                   <dt class="metric-label">最终置信度</dt>
-                  <dd class="mt-1 text-sm text-slate-200/80">{{ forecast ? formatPercent(forecast.confidence_score) : "—" }}</dd>
+                  <dd class="mt-1 text-ui-body-md">{{ forecast ? formatPercent(forecast.confidence_score) : "—" }}</dd>
                 </div>
                 <div class="metric-card metric-card--embedded">
                   <dt class="metric-label">采纳论据</dt>
-                  <dd class="mt-1 text-sm leading-6 text-slate-200/80">{{ committeeAdoptedArguments.join("；") || "—" }}</dd>
+                  <dd class="mt-1 text-ui-body-md">{{ committeeAdoptedArguments.join("；") || "—" }}</dd>
                 </div>
                 <div class="metric-card metric-card--embedded">
                   <dt class="metric-label">拒绝论据</dt>
-                  <dd class="mt-1 text-sm leading-6 text-slate-200/80">{{ committeeRejectedArguments.join("；") || "—" }}</dd>
+                  <dd class="mt-1 text-ui-body-md">{{ committeeRejectedArguments.join("；") || "—" }}</dd>
                 </div>
               </div>
 
-              <p class="mt-4 text-sm leading-7 text-slate-200/85">
+              <p class="mt-4 text-ui-body-md">
                 {{ committeeDecision?.decision_summary ?? "当前尚无主席裁决摘要。" }}
               </p>
 
               <div class="mt-5 space-y-3">
-                <p class="text-[11px] tracking-[0.18em] text-slate-300/45">最终交易计划</p>
+                <p class="text-ui-meta text-ui-surface-muted">最终交易计划</p>
                 <div v-if="committeeTradePlan && committeeTradePlan.tradePlan" class="grid gap-3 sm:grid-cols-2">
                   <div v-for="row in committeeTradePlanRows" :key="row.label" class="metric-card metric-card--embedded">
                     <dt class="metric-label">{{ row.label }}</dt>
-                    <dd class="mt-1 text-sm leading-6 text-slate-200/80">{{ row.value }}</dd>
+                    <dd class="mt-1 text-ui-body-md">{{ row.value }}</dd>
                   </div>
                 </div>
-                <div v-else class="metric-card metric-card--empty text-sm text-slate-300/60">
+                <div v-else class="metric-card metric-card--empty surface-card-dark--empty text-ui-body-sm">
                   {{ committeeDecision?.wait_conditions?.length ? committeeDecision.wait_conditions.join("；") : "当前不适合直接入场，等待条件不足。" }}
                 </div>
               </div>
@@ -499,71 +455,25 @@
 
             <aside class="space-y-4">
               <article class="dashboard-panel rounded-[28px] p-4">
-                <div class="flex items-center justify-between gap-3">
-                  <div class="space-y-1">
-                    <p class="panel-title">Validation Status</p>
-                    <h3 class="text-lg font-semibold text-slate-50">规则校验与修复</h3>
-                  </div>
-                  <span class="status-pill" :class="committeeValidationToneClass">{{ committeeValidationLabel }}</span>
-                </div>
+                <DashboardSectionHeader eyebrow="Validation" title="规则校验与修复" heading-tag="h3">
+                  <template #actions>
+                    <span class="status-pill" :class="committeeValidationToneClass">{{ committeeValidationLabel }}</span>
+                  </template>
+                </DashboardSectionHeader>
 
-                <p class="mt-3 text-sm leading-6 text-slate-200/80">{{ committeeValidationSummary }}</p>
+                <p class="mt-3 text-ui-body-md">{{ committeeValidationSummary }}</p>
 
                 <div class="mt-4 space-y-3">
                   <div v-if="committeeValidationWarnings.length > 0" class="space-y-2">
-                    <p class="text-[11px] tracking-[0.18em] text-slate-300/45">warnings</p>
+                    <p class="text-ui-meta text-ui-surface-muted">warnings</p>
                     <div v-for="(warning, index) in committeeValidationWarnings" :key="`warning-${index}-${warning}`" class="metric-card metric-card--embedded">
-                      <p class="text-sm leading-6 text-slate-200/80">{{ warning }}</p>
+                      <p class="text-ui-body-md">{{ warning }}</p>
                     </div>
                   </div>
                   <div v-if="committeeValidationErrors.length > 0" class="space-y-2">
-                    <p class="text-[11px] tracking-[0.18em] text-slate-300/45">errors</p>
+                    <p class="text-ui-meta text-ui-surface-muted">errors</p>
                     <div v-for="(error, index) in committeeValidationErrors" :key="`error-${index}-${error}`" class="metric-card metric-card--embedded">
-                      <p class="text-sm leading-6 text-slate-200/80">{{ error }}</p>
-                    </div>
-                  </div>
-                </div>
-              </article>
-
-              <article class="dashboard-panel rounded-[28px] p-4">
-                <div class="flex items-center justify-between gap-3">
-                  <div class="space-y-1">
-                    <p class="panel-title">Prompt Version Metadata</p>
-                    <h3 class="text-lg font-semibold text-slate-50">实际使用的 prompt</h3>
-                  </div>
-                  <span class="analysis-badge analysis-badge--accent">{{ committeePromptVersions.length }}</span>
-                </div>
-
-                <div v-if="committeePromptVersions.length > 0" class="mt-4 space-y-2">
-                  <div v-for="prompt in committeePromptVersions" :key="`${prompt.prompt_key}-${prompt.version}`" class="metric-card metric-card--embedded">
-                    <div class="flex flex-wrap items-center justify-between gap-3">
-                      <p class="font-mono text-xs tracking-[0.18em] text-slate-300/70">{{ prompt.prompt_key }}</p>
-                      <span class="status-pill status-pill--neutral">v{{ prompt.version }}</span>
-                    </div>
-                    <p class="mt-2 text-sm leading-6 text-slate-200/80">
-                      {{ prompt.agent_name ?? prompt.node_name ?? prompt.prompt_type }}
-                    </p>
-                  </div>
-                </div>
-                <div v-else class="metric-card metric-card--empty mt-4 text-sm text-slate-300/60">
-                  当前没有可展示的 prompt 元数据。
-                </div>
-              </article>
-
-              <article class="dashboard-panel rounded-[28px] p-4">
-                <div class="flex items-center justify-between gap-3">
-                  <div class="space-y-1">
-                    <p class="panel-title">Graph Execution Trace</p>
-                    <h3 class="text-lg font-semibold text-slate-50">节点执行轨迹</h3>
-                  </div>
-                  <span class="font-mono text-[11px] tracking-[0.18em] text-slate-300/55">completed / running / failed / pending</span>
-                </div>
-
-                <div class="mt-4 grid gap-2">
-                  <div v-for="node in committeeTraceNodes" :key="node.key" class="metric-card metric-card--embedded">
-                    <div class="flex flex-wrap items-center justify-between gap-3">
-                      <p class="font-mono text-xs tracking-[0.18em] text-slate-300/70">{{ node.label }}</p>
-                      <span class="status-pill" :class="node.statusClass">{{ node.statusLabel }}</span>
+                      <p class="text-ui-body-md">{{ error }}</p>
                     </div>
                   </div>
                 </div>
@@ -573,12 +483,7 @@
         </section>
 
         <section class="dashboard-panel rounded-[28px] p-5 sm:p-6">
-          <div class="flex items-center justify-between gap-3">
-            <div class="space-y-2">
-              <p class="panel-title">智能体投票</p>
-              <h2 class="section-heading">多智能体共识矩阵</h2>
-            </div>
-          </div>
+          <DashboardSectionHeader eyebrow="Agent Consensus" title="多智能体共识矩阵" />
 
           <div class="mt-4 space-y-3 lg:hidden">
             <article
@@ -587,7 +492,7 @@
               class="metric-card metric-card--soft"
             >
               <div class="flex flex-wrap items-center justify-between gap-3">
-                <p class="font-mono text-sm font-semibold text-slate-50">{{ agentLabel(vote.agent) }}</p>
+                <p class="text-ui-numeric">{{ agentLabel(vote.agent) }}</p>
                 <span class="status-pill" :class="voteDirectionClass(vote.direction)">
                   {{ DIRECTION_LABELS[vote.direction] }}
                 </span>
@@ -596,55 +501,47 @@
               <dl class="mt-4 grid gap-3">
                 <div class="metric-card metric-card--embedded">
                   <dt class="metric-label">置信度</dt>
-                  <dd class="mt-1 font-mono text-sm text-slate-200/80">{{ formatPercent(vote.confidence) }}</dd>
+                  <dd class="mt-1 text-ui-numeric">{{ formatPercent(vote.confidence) }}</dd>
                 </div>
                 <div class="metric-card metric-card--embedded">
                   <dt class="metric-label">理由</dt>
-                  <dd class="mt-1 break-words text-sm leading-6 text-slate-200/80">{{ vote.rationale }}</dd>
+                  <dd class="mt-1 break-words text-ui-body-md">{{ vote.rationale }}</dd>
                 </div>
               </dl>
             </article>
 
-            <div v-if="forecast.agent_votes.length === 0" class="metric-card metric-card--empty text-center text-sm text-slate-300/60">
+            <div v-if="forecast.agent_votes.length === 0" class="metric-card metric-card--empty surface-card-dark--empty text-center text-ui-body-sm">
               当前结果未返回智能体投票。
             </div>
           </div>
 
-          <div class="mt-4 hidden overflow-x-auto rounded-[24px] border border-slate-400/15 bg-[#0f172a]/80 lg:block">
-            <table class="min-w-full divide-y divide-slate-400/10">
-              <thead class="bg-[#0f172a]/90">
+          <div class="dashboard-table-shell mt-4 hidden lg:block">
+            <table class="min-w-full">
+              <thead class="dashboard-table-head">
                 <tr>
-                  <th class="whitespace-nowrap px-4 py-3 text-left font-mono text-[11px] tracking-[0.18em] text-slate-300/70">
-                    智能体
-                  </th>
-                  <th class="whitespace-nowrap px-4 py-3 text-left font-mono text-[11px] tracking-[0.18em] text-slate-300/70">
-                    方向
-                  </th>
-                  <th class="whitespace-nowrap px-4 py-3 text-left font-mono text-[11px] tracking-[0.18em] text-slate-300/70">
-                    置信度
-                  </th>
-                  <th class="px-4 py-3 text-left font-mono text-[11px] tracking-[0.18em] text-slate-300/70">
-                    理由
-                  </th>
+                  <th class="dashboard-table-head-cell">智能体</th>
+                  <th class="dashboard-table-head-cell">方向</th>
+                  <th class="dashboard-table-head-cell">置信度</th>
+                  <th class="dashboard-table-head-cell">理由</th>
                 </tr>
               </thead>
-              <tbody class="divide-y divide-slate-400/10 bg-[#0f172a]/90">
+              <tbody class="dashboard-table-body">
                 <tr
                   v-for="vote in forecast.agent_votes"
                   :key="`${vote.agent}-${vote.rationale}`"
-                  class="transition-colors duration-200 hover:bg-[#0b1d13]"
+                  class="dashboard-table-row"
                 >
-                  <td class="whitespace-nowrap px-4 py-3 font-mono text-sm font-medium text-slate-50">{{ agentLabel(vote.agent) }}</td>
+                  <td class="dashboard-table-cell text-ui-numeric">{{ agentLabel(vote.agent) }}</td>
                   <td class="whitespace-nowrap px-4 py-3">
                     <span class="status-pill" :class="voteDirectionClass(vote.direction)">
                       {{ DIRECTION_LABELS[vote.direction] }}
                     </span>
                   </td>
-                  <td class="whitespace-nowrap px-4 py-3 font-mono text-sm text-slate-200/80">{{ formatPercent(vote.confidence) }}</td>
-                  <td class="px-4 py-3 text-sm leading-6 break-words text-slate-200/80">{{ vote.rationale }}</td>
+                  <td class="dashboard-table-cell text-ui-numeric">{{ formatPercent(vote.confidence) }}</td>
+                  <td class="dashboard-table-cell--wrap">{{ vote.rationale }}</td>
                 </tr>
                 <tr v-if="forecast.agent_votes.length === 0">
-                  <td colspan="4" class="px-4 py-6 text-center text-sm text-slate-300/60">
+                  <td colspan="4" class="px-4 py-6 text-center text-ui-body-sm">
                     当前结果未返回智能体投票。
                   </td>
                 </tr>
@@ -654,43 +551,39 @@
         </section>
 
         <section class="dashboard-panel rounded-[28px] px-5 py-6 sm:px-6 lg:px-8">
-          <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-            <div class="space-y-2">
-              <p class="panel-title">时间窗判断</p>
-              <h2 class="section-heading">时间窗展望</h2>
-              <p class="section-copy max-w-3xl">
-                每个时间窗单独展示方向与补充判断，便于快速扫读。
-              </p>
-            </div>
-            <span class="font-mono text-[11px] tracking-[0.18em] text-slate-500">区间判断</span>
-          </div>
+          <DashboardSectionHeader
+            eyebrow="Window Outlook"
+            title="时间窗展望"
+            description="每个时间窗单独展示方向与补充判断，便于快速扫读。"
+            badge="区间判断"
+          />
 
           <div v-if="windowDirectionCards.length > 0" class="mt-4 grid gap-4 lg:grid-cols-2">
             <article
               v-for="window in windowDirectionCards"
               :key="window.label"
-              class="summary-card summary-card--flat rounded-[28px] border border-slate-200 bg-white px-4 py-4 sm:px-5"
+              class="summary-card summary-card--flat surface-card-dark surface-card-dark--soft rounded-[28px] px-4 py-4 sm:px-5"
             >
               <div class="window-card-header">
-                <p class="window-card-title">{{ window.label }}</p>
+                <p class="window-card-title text-ui-card-title">{{ window.label }}</p>
                 <div class="window-card-chips">
                   <span class="status-pill" :class="window.directionClass">{{ window.directionLabel }}</span>
-                  <span class="analysis-badge analysis-badge--slate">{{ window.strength }}</span>
-                  <span class="analysis-badge analysis-badge--cyan">置信度 {{ window.confidence }}</span>
-                  <span v-if="window.focusTag" class="analysis-badge analysis-badge--gold">{{ window.focusTag }}</span>
+                  <p class="text-ui-meta">强度 <span class="text-ui-surface-soft">{{ window.strength }}</span></p>
+                  <p class="text-ui-meta">置信度 <span class="text-ui-surface-soft">{{ window.confidence }}</span></p>
+                  <p v-if="window.focusTag" class="text-ui-meta">{{ window.focusTag }}</p>
                 </div>
               </div>
 
               <div class="window-card-body">
                 <div class="window-card-main">
                   <span class="summary-stance-label">主判断</span>
-                  <p class="window-card-copy">{{ window.primaryReason }}</p>
+                  <p class="window-card-copy text-ui-body-md">{{ window.primaryReason }}</p>
                 </div>
 
                 <div v-if="window.secondaryReasons.length > 0" class="window-card-secondary">
                   <div class="flex items-center justify-between gap-3">
                     <span class="summary-stance-label">补充判断</span>
-                    <span class="font-mono text-[10px] tracking-[0.18em] text-slate-500">agent 补充</span>
+                    <span class="text-ui-meta">agent 补充</span>
                   </div>
                   <div class="space-y-2">
                     <div
@@ -702,7 +595,7 @@
                         item.important ? 'window-insight--important' : '',
                       ]"
                     >
-                      <span class="analysis-badge" :class="item.tagClass">{{ item.tag }}</span>
+                      <span class="metric-label">{{ item.tag }}</span>
                       <p class="summary-flat-row__text">{{ item.text }}</p>
                     </div>
                   </div>
@@ -725,17 +618,11 @@
 
           <aside class="space-y-4">
             <article class="dashboard-panel rounded-[28px] p-5 sm:p-6">
-              <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
-                <div class="space-y-2">
-                  <p class="panel-title">实时元数据</p>
-                  <h2 class="section-heading">研究元数据</h2>
-                </div>
-                <span class="analysis-badge analysis-badge--accent">元数据</span>
-              </div>
+              <DashboardSectionHeader eyebrow="Research Metadata" title="研究元数据" badge="元数据" />
 
               <div class="mt-4 space-y-3">
                 <div v-for="metric in supportCards" :key="metric.label" class="summary-flat-row">
-                  <span class="analysis-badge analysis-badge--slate">{{ metric.label }}</span>
+                  <span class="metric-label">{{ metric.label }}</span>
                   <p class="summary-flat-row__text">{{ metric.value }}</p>
                 </div>
               </div>
@@ -745,25 +632,21 @@
 
         <section class="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(380px,0.8fr)]">
           <article class="dashboard-panel rounded-[28px] p-5 sm:p-6">
-            <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-              <div class="space-y-2">
-                <p class="panel-title">研究摘要</p>
-                <h2 class="section-heading">本轮 XAUUSD 研究结论</h2>
-                <p class="text-xs tracking-[0.16em] text-slate-600">
-                  结论时间：{{ formatDateTime(forecast.reference_time) }}
-                </p>
-              </div>
-              <span class="font-mono text-[11px] tracking-[0.18em] text-slate-500">结构化摘要</span>
-            </div>
+            <DashboardSectionHeader
+              eyebrow="Research Summary"
+              title="本轮 XAUUSD 研究结论"
+              :description="`结论时间：${formatDateTime(forecast.reference_time)}`"
+              badge="结构化摘要"
+            />
 
             <div class="mt-4 space-y-4">
               <article
                 v-for="section in orderedSummaryCards"
                 :key="section.key"
-                class="summary-card summary-card--flat rounded-[28px] border border-slate-200 bg-white px-4 py-4 sm:px-5"
+                class="summary-card summary-card--flat surface-card-dark surface-card-dark--soft rounded-[28px] px-4 py-4 sm:px-5"
                 :class="[section.accentClass]"
               >
-                <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+                <div class="flex flex-wrap items-center justify-between gap-3 border-b surface-divider pb-3">
                   <p class="metric-label">{{ section.title }}</p>
                   <div class="summary-stance-row summary-stance-row--compact">
                     <span class="summary-stance-label">综合评价</span>
@@ -773,13 +656,13 @@
                   </div>
                 </div>
 
-                <div class="mt-4 divide-y divide-slate-200">
+              <div class="summary-card__sections mt-4 divide-y">
                   <div class="py-3">
                     <div class="summary-stance-row">
                       <span class="summary-stance-label">主判断</span>
-                      <span v-if="section.hasImportantLine" class="analysis-badge analysis-badge--accent">重点</span>
+                      <span v-if="section.hasImportantLine" class="metric-label">重点</span>
                     </div>
-                    <p class="mt-2 text-sm leading-7 text-slate-700">{{ section.leadLine.text }}</p>
+                    <p class="mt-2 text-ui-body-md">{{ section.leadLine.text }}</p>
                   </div>
 
                   <div
@@ -792,7 +675,7 @@
                       class="summary-flat-row"
                       :class="line.important ? 'summary-flat-row--highlight' : ''"
                     >
-                      <span class="analysis-badge" :class="line.tagClass">{{ line.tag }}</span>
+                      <span class="metric-label">{{ line.tag }}</span>
                       <p class="summary-flat-row__text">{{ line.text }}</p>
                     </div>
                   </div>
@@ -820,8 +703,8 @@
                     >
                       <div class="summary-evidence-index">{{ String(item.index).padStart(2, "0") }}</div>
                       <div class="summary-flat-row__body">
-                        <div class="font-mono text-[10px] tracking-[0.18em] text-slate-500">{{ item.source }}</div>
-                        <div class="mt-1 text-sm leading-6 text-slate-700">{{ item.text }}</div>
+                        <div class="text-ui-meta">{{ item.source }}</div>
+                        <div class="mt-1 text-ui-body-md">{{ item.text }}</div>
                       </div>
                     </div>
                   </div>
@@ -846,18 +729,18 @@
 
           <aside class="dashboard-panel risk-panel rounded-[28px] p-5 sm:p-6">
             <div class="flex flex-wrap items-center justify-between gap-3">
-              <p class="panel-title risk-panel__title">风险提示</p>
-              <span class="font-mono text-[11px] tracking-[0.18em] text-amber-200/70">重点关注</span>
+              <p class="panel-title risk-panel__title">Risk Notes</p>
+              <span class="text-ui-warning">重点关注</span>
             </div>
 
             <div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
               <div class="metric-card metric-card--soft metric-card--risk-meta">
                 <p class="metric-label">风险生成时间</p>
-                <p class="metric-value mt-1 text-sm text-slate-100/90">{{ formatDateTime(forecast.reference_time) }}</p>
+                <p class="metric-value mt-1 text-ui-body-md">{{ formatDateTime(forecast.reference_time) }}</p>
               </div>
               <div class="metric-card metric-card--soft metric-card--risk-meta">
                 <p class="metric-label">数据参考时间</p>
-                <p class="metric-value mt-1 text-sm text-slate-100/90">{{ formatDateTime(forecast.data_timestamp) }}</p>
+                <p class="metric-value mt-1 text-ui-body-md">{{ formatDateTime(forecast.data_timestamp) }}</p>
               </div>
             </div>
 
@@ -878,12 +761,12 @@
                 <p class="risk-note-body mt-2 whitespace-pre-line">
                   {{ note.text }}
                 </p>
-                <div class="mt-3 flex items-center justify-between gap-3 text-[11px] tracking-[0.14em] text-slate-300/50">
+                <div class="mt-3 flex items-center justify-between gap-3 text-ui-meta">
                   <span>生成时间</span>
                   <span>{{ note.generatedAtLabel }}</span>
                 </div>
               </li>
-              <li v-if="riskNoteItems.length === 0" class="metric-card metric-card--empty text-sm text-slate-200/60">
+              <li v-if="riskNoteItems.length === 0" class="metric-card metric-card--empty surface-card-dark--empty text-ui-body-sm">
                 当前结果未返回额外的风险提示。
               </li>
             </ul>
@@ -892,18 +775,17 @@
 
         <section class="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(340px,0.78fr)]">
           <article class="dashboard-panel rounded-[28px] p-5 sm:p-6">
-            <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-              <div class="space-y-2">
-                <p class="panel-title">历史表现</p>
-                <h2 class="section-heading">每日 forecast 复盘与收益点数</h2>
-                <p class="section-copy max-w-3xl">
-                  这里展示按收盘后评估写回的历史结果，包括每日收益点数、命中结果和结算价，供后续预测参考。
-                </p>
-              </div>
-              <span class="font-mono text-[11px] tracking-[0.18em] text-slate-300/55">
-                {{ isHistoryLoading ? "正在加载历史表现" : `${historyStats.evaluatedCount} / ${historyStats.totalCount} 已评估` }}
-              </span>
-            </div>
+            <DashboardSectionHeader
+              eyebrow="Forecast Evaluation"
+              title="每日 forecast 复盘与收益点数"
+              description="这里展示按收盘后评估写回的历史结果，包括每日收益点数、命中结果和结算价，供后续预测参考。"
+            >
+              <template #actions>
+                <span class="text-ui-meta">
+                  {{ isHistoryLoading ? "正在加载历史表现" : `${historyStats.evaluatedCount} / ${historyStats.totalCount} 已评估` }}
+                </span>
+              </template>
+            </DashboardSectionHeader>
 
             <div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <div class="metric-card metric-card--soft">
@@ -943,22 +825,22 @@
               </div>
             </div>
 
-            <div class="mt-4 rounded-[28px] border border-slate-300/10 bg-[#0f172a]/75 p-4">
+            <div class="mt-4 rounded-[28px] border surface-divider surface-card-dark surface-card-dark--soft p-4">
               <div class="flex items-center justify-between gap-3">
                 <div class="space-y-1">
                   <p class="panel-title">收益图表</p>
-                  <h3 class="text-lg font-semibold text-slate-50">每日评估收益点数</h3>
+                  <h3 class="text-ui-card-title">每日评估收益点数</h3>
                 </div>
-                <span class="font-mono text-[11px] tracking-[0.18em] text-slate-300/55">bar chart</span>
+                <span class="text-ui-meta">bar chart</span>
               </div>
 
-              <div v-if="isHistoryLoading" class="mt-4 rounded-[20px] border border-slate-400/15 bg-[#0f172a]/70 p-6 text-sm text-slate-300/65">
+              <div v-if="isHistoryLoading" class="mt-4 rounded-[20px] border surface-divider surface-card-dark--empty p-6 text-ui-body-sm">
                 历史表现正在加载。
               </div>
-              <div v-else-if="historyErrorMessage" class="mt-4 rounded-[20px] border border-rose-400/20 bg-rose-500/10 p-6 text-sm text-rose-100">
+              <div v-else-if="historyErrorMessage" class="mt-4 rounded-[20px] border surface-card-dark--error p-6 text-ui-body-sm">
                 {{ historyErrorMessage }}
               </div>
-              <div v-else-if="historyChart.bars.length === 0" class="mt-4 rounded-[20px] border border-dashed border-slate-400/20 bg-[#0f172a]/70 p-6 text-sm text-slate-300/65">
+              <div v-else-if="historyChart.bars.length === 0" class="mt-4 rounded-[20px] border border-dashed surface-divider surface-card-dark--empty p-6 text-ui-body-sm">
                 <template v-if="historyStats.totalCount > 0">
                   当前已有 forecast 记录，但尚未生成可展示的收盘评估。定时任务会在美国收盘后按最新收盘日线回写；如果刚过收盘窗口，请等待下一轮维护。
                 </template>
@@ -966,7 +848,7 @@
                   当前没有已评估的历史 forecast，可以在后续收盘评估后查看图表。
                 </template>
               </div>
-              <div v-else class="mt-4 overflow-x-auto rounded-[22px] border border-slate-400/15 bg-[#0f172a]/80 p-3">
+              <div v-else class="mt-4 overflow-x-auto rounded-[22px] border surface-divider surface-card-dark surface-card-dark--soft p-3">
                 <svg
                   :viewBox="`0 0 ${historyChart.width} ${historyChart.height}`"
                   class="h-[280px] w-full min-w-[840px]"
@@ -975,12 +857,12 @@
                 >
                   <defs>
                     <linearGradient id="history-positive-gradient" x1="0%" y1="0%" x2="0%" y2="100%">
-                      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.95" />
-                      <stop offset="100%" stop-color="#22c55e" stop-opacity="0.45" />
+                      <stop offset="0%" stop-color="var(--goldfx-history-positive-start)" stop-opacity="0.95" />
+                      <stop offset="100%" stop-color="var(--goldfx-history-positive-end)" stop-opacity="0.45" />
                     </linearGradient>
                     <linearGradient id="history-negative-gradient" x1="0%" y1="0%" x2="0%" y2="100%">
-                      <stop offset="0%" stop-color="#fb7185" stop-opacity="0.95" />
-                      <stop offset="100%" stop-color="#f59e0b" stop-opacity="0.45" />
+                      <stop offset="0%" stop-color="var(--goldfx-history-negative-start)" stop-opacity="0.95" />
+                      <stop offset="100%" stop-color="var(--goldfx-history-negative-end)" stop-opacity="0.45" />
                     </linearGradient>
                   </defs>
                   <line
@@ -988,7 +870,7 @@
                     :y1="historyChart.baselineY"
                     x2="816"
                     :y2="historyChart.baselineY"
-                    stroke="rgba(148, 163, 184, 0.34)"
+                    stroke="var(--goldfx-history-baseline)"
                     stroke-width="1.2"
                     stroke-dasharray="6 6"
                   />
@@ -1008,9 +890,8 @@
                       :x="bar.x + bar.width / 2"
                       :y="bar.y + (bar.value.startsWith('-') ? bar.height + 18 : Math.max(bar.y - 10, 16))"
                       text-anchor="middle"
-                      class="fill-slate-100"
+                      class="history-chart__value"
                       font-size="11"
-                      font-family="Fira Code, monospace"
                     >
                       {{ bar.value }}
                     </text>
@@ -1018,9 +899,8 @@
                       :x="bar.x + bar.width / 2"
                       y="228"
                       text-anchor="middle"
-                      class="fill-slate-300/70"
+                      class="history-chart__date"
                       font-size="10"
-                      font-family="Fira Code, monospace"
                     >
                       {{ bar.dateLabel }}
                     </text>
@@ -1028,9 +908,8 @@
                       :x="bar.x + bar.width / 2"
                       y="242"
                       text-anchor="middle"
-                      class="fill-slate-300/45"
+                      class="history-chart__result"
                       font-size="9"
-                      font-family="Fira Code, monospace"
                     >
                       {{ bar.resultLabel }}
                     </text>
@@ -1045,9 +924,9 @@
               <div class="flex items-center justify-between gap-3">
                 <div class="space-y-1">
                   <p class="panel-title">最近结果</p>
-                  <h3 class="text-lg font-semibold text-slate-50">逐日复盘</h3>
+                  <h3 class="text-ui-card-title">逐日复盘</h3>
                 </div>
-                <span class="font-mono text-[11px] tracking-[0.18em] text-slate-300/55">latest</span>
+                <span class="text-ui-meta">latest</span>
               </div>
 
               <div v-if="!isHistoryLoading && !historyErrorMessage && historyItemsDescending.length > 0" class="mt-4 space-y-3">
@@ -1058,19 +937,19 @@
                 >
                   <div class="flex items-start justify-between gap-3">
                     <div class="space-y-1">
-                      <p class="font-mono text-xs tracking-[0.18em] text-slate-300/70">
+                      <p class="text-ui-meta">
                         交易日：{{ formatDateShort(item.trading_day ?? item.forecast.reference_time) }}
                       </p>
-                      <p class="font-mono text-[11px] tracking-[0.16em] text-slate-300/55">
+                      <p class="text-ui-meta">
                         预测：{{ formatDateTime(item.forecast.reference_time) }}
                       </p>
                       <p
                         v-if="item.evaluation"
-                        class="font-mono text-[11px] tracking-[0.16em] text-slate-300/55"
+                        class="text-ui-meta"
                       >
                         评估：{{ formatDateTime(item.evaluation.evaluated_at) }}
                       </p>
-                      <p class="text-sm font-semibold text-slate-50">
+                      <p class="text-ui-card-title">
                         {{ DIRECTION_LABELS[item.forecast.direction] }} · {{ formatPrice(item.forecast.current_price) }}
                       </p>
                     </div>
@@ -1085,13 +964,13 @@
                   <dl class="mt-3 grid gap-2">
                     <div class="metric-card metric-card--embedded">
                       <dt class="metric-label">结论</dt>
-                      <dd class="mt-1 text-sm text-slate-200/80">
+                      <dd class="mt-1 text-ui-body-md">
                         {{ item.evaluation ? HISTORY_RESULT_LABELS[item.evaluation.result] ?? item.evaluation.result : "尚未完成收盘评估" }}
                       </dd>
                     </div>
                     <div class="metric-card metric-card--embedded">
                       <dt class="metric-label">结算价</dt>
-                      <dd class="mt-1 text-sm text-slate-200/80">
+                      <dd class="mt-1 text-ui-body-md">
                         {{ item.evaluation ? formatPrice(item.evaluation.settlement_price) : "—" }}
                       </dd>
                     </div>
@@ -1099,7 +978,7 @@
                 </article>
               </div>
 
-              <div v-else class="metric-card metric-card--empty mt-4 text-sm text-slate-300/60">
+              <div v-else class="metric-card metric-card--empty surface-card-dark--empty mt-4 text-ui-body-sm">
                 暂无可展示的历史结果。
               </div>
             </article>
@@ -1108,36 +987,41 @@
               <div class="flex items-center justify-between gap-3">
                 <div class="space-y-1">
                   <p class="panel-title">反馈回流</p>
-                  <h3 class="text-lg font-semibold text-slate-50">历史评估摘要</h3>
+                  <h3 class="text-ui-card-title">历史评估摘要</h3>
                 </div>
-                <span class="font-mono text-[11px] tracking-[0.18em] text-slate-300/55">context</span>
+                <span class="text-ui-meta">context</span>
               </div>
               <div v-if="historyItemsDescending.length > 0" class="mt-4 space-y-2">
                 <div
                   v-for="item in historyItemsDescending.slice(0, 4)"
                   :key="`summary-${item.forecast.id ?? item.forecast.reference_time}`"
-                  class="summary-card summary-card--slate text-sm leading-6 text-slate-200/80"
+                  class="summary-card summary-card--slate surface-card-dark surface-card-dark--soft text-ui-body-md"
                 >
                   <div class="flex items-center justify-between gap-3">
                     <div class="space-y-0.5">
-                      <p class="font-mono text-[11px] tracking-[0.18em] text-slate-300/70">
+                      <p class="text-ui-meta">
                         交易日：{{ formatDateShort(item.trading_day ?? item.forecast.reference_time) }}
                       </p>
-                      <p class="font-mono text-[11px] tracking-[0.18em] text-slate-300/70">
+                      <p class="text-ui-meta">
                         预测：{{ formatDateTime(item.forecast.reference_time) }}
                       </p>
-                      <p v-if="item.evaluation" class="font-mono text-[10px] tracking-[0.16em] text-slate-300/50">
+                      <p v-if="item.evaluation" class="text-ui-meta">
                         评估：{{ formatDateTime(item.evaluation.evaluated_at) }}
                       </p>
                     </div>
-                    <span class="analysis-badge">{{ item.evaluation ? HISTORY_RESULT_LABELS[item.evaluation.result] ?? item.evaluation.result : "待评估" }}</span>
+                    <div class="flex flex-col items-end gap-1">
+                      <p class="text-ui-meta">评估结果</p>
+                      <p class="text-ui-label">
+                        {{ item.evaluation ? HISTORY_RESULT_LABELS[item.evaluation.result] ?? item.evaluation.result : "待评估" }}
+                      </p>
+                    </div>
                   </div>
                   <p class="mt-2">
                     {{ item.evaluation?.summary ?? "当前 forecast 尚未完成评估。" }}
                   </p>
                 </div>
               </div>
-              <div v-else class="metric-card metric-card--empty mt-4 text-sm text-slate-300/60">
+              <div v-else class="metric-card metric-card--empty surface-card-dark--empty mt-4 text-ui-body-sm">
                 暂无摘要可以回流到后续预测。
               </div>
             </article>
@@ -1150,9 +1034,9 @@
               <p class="panel-title">免责声明</p>
               <h2 class="section-heading">仅供研究，不构成投资建议</h2>
             </div>
-            <span class="font-mono text-[11px] tracking-[0.18em] text-slate-300/55">Research only</span>
+            <span class="text-ui-meta">Research only</span>
           </div>
-          <p class="mt-4 break-words text-sm leading-6 text-slate-200/80">
+          <p class="mt-4 break-words text-ui-body-md">
             {{ forecast.disclaimer }}
           </p>
         </section>
@@ -1170,7 +1054,6 @@ import {
   DIRECTION_LABELS,
   DIRECTION_STYLES,
   COMMITTEE_BIAS_LABELS,
-  COMMITTEE_NODE_LABELS,
   HISTORY_RESULT_LABELS,
   EMPTY_FORECAST_MESSAGE,
   ERROR_FORECAST_MESSAGE,
@@ -1183,6 +1066,8 @@ import {
   formatRuntimeSourceLabel,
 } from "@/constants/forecast";
 import MarketCandlestickChart from "@/components/MarketCandlestickChart.vue";
+import DashboardSectionHeader from "@/components/dashboard/DashboardSectionHeader.vue";
+import DashboardStateBanner from "@/components/dashboard/DashboardStateBanner.vue";
 import {
   fetchForecastHistory,
   fetchLatestForecast,
@@ -1201,7 +1086,6 @@ import type {
   ForecastHistoryItem,
   SchedulerRunStatus,
   EvidencePackage,
-  PromptVersionMetadata,
 } from "@/types/forecast";
 
 const forecast = ref<FinalForecast | null>(null);
@@ -1219,39 +1103,6 @@ const marketBarsErrorMessage = ref("");
 const marketSessionClock = ref(new Date());
 let marketSessionTimer: ReturnType<typeof window.setInterval> | null = null;
 let liveRefreshTimer: ReturnType<typeof window.setInterval> | null = null;
-
-const COMMITTEE_TRACE_SEQUENCE = [
-  "router_validate_request",
-  "tool_load_market_data",
-  "tool_ensure_market_data_freshness",
-  "tool_fetch_current_gold_quote",
-  "tool_compute_indicators",
-  "agent_technical_analysis",
-  "tool_fetch_macro_inputs",
-  "agent_macro_analysis",
-  "tool_fetch_newsflow_inputs",
-  "agent_news_analysis",
-  "tool_fetch_pizza_index_inputs",
-  "tool_load_forecast_feedback_history",
-  "tool_fetch_polymarket_inputs",
-  "tool_fetch_market_sentiment_inputs",
-  "tool_fetch_alt_data_inputs",
-  "agent_market_sentiment_analysis",
-  "agent_alt_data_analysis",
-  "agent_risk_analysis",
-  "node_build_evidence_package",
-  "agent_bull_opening_case",
-  "agent_bear_opening_case",
-  "agent_bull_rebuttal",
-  "agent_bear_rebuttal",
-  "agent_bull_final_position",
-  "agent_bear_final_position",
-  "agent_trading_committee_chair",
-  "node_validate_committee_decision",
-  "agent_repair_committee_decision",
-  "node_persist_forecast",
-  "router_finalize_result",
-] as const;
 
 const stateLabel = computed(() => {
   if (isLoading.value) {
@@ -1281,7 +1132,7 @@ const directionLabel = computed(() =>
 );
 
 const directionClass = computed(() =>
-  forecast.value ? DIRECTION_STYLES[forecast.value.direction] : "border-amber-300/30 bg-amber-500/10 text-amber-100",
+  forecast.value ? DIRECTION_STYLES[forecast.value.direction] : "status-pill--neutral",
 );
 
 const schedulerStatusLabel = computed(() => {
@@ -1423,10 +1274,10 @@ const heroChips = computed(() => {
   }
 
   return [
-    { label: "标的", value: forecast.value.symbol },
-    { label: "当日方向", value: directionLabel.value },
+    { label: "当前价", value: formatPrice(forecast.value.current_price) },
+    { label: "方向", value: directionLabel.value },
     { label: "置信度", value: formatPercent(forecast.value.confidence_score) },
-    { label: "委员会裁决", value: committeeBiasLabel.value },
+    { label: "风险回报", value: riskRewardRatio.value },
     { label: "可执行性", value: committeeActionabilityLabel.value },
   ];
 });
@@ -1560,45 +1411,6 @@ const committeeWinningSideLabel = computed(() => {
     return "无明确胜者";
   }
   return "未决";
-});
-
-const committeePromptVersions = computed(() => forecast.value?.prompt_versions ?? []);
-
-const committeeTraceNodes = computed(() => {
-  const hasForecast = Boolean(forecast.value);
-  const schedulerState = schedulerStatus.value?.status ?? null;
-  const currentStage = schedulerStatus.value?.current_stage ?? "";
-  const currentIndex = COMMITTEE_TRACE_SEQUENCE.indexOf(currentStage as (typeof COMMITTEE_TRACE_SEQUENCE)[number]);
-
-  return COMMITTEE_TRACE_SEQUENCE.map((key, index) => {
-    let status: "completed" | "running" | "failed" | "pending" = "pending";
-
-    if (schedulerState === "running") {
-      if (currentIndex >= 0 && index < currentIndex) {
-        status = "completed";
-      } else if (currentIndex >= 0 && index === currentIndex) {
-        status = "running";
-      }
-    } else if (schedulerState === "failed") {
-      if (currentIndex >= 0 && index < currentIndex) {
-        status = "completed";
-      } else if (currentIndex >= 0 && index === currentIndex) {
-        status = "failed";
-      }
-    } else if (schedulerState === "success") {
-      status = "completed";
-    } else if (hasForecast) {
-      status = "completed";
-    }
-
-    return {
-      key,
-      label: COMMITTEE_NODE_LABELS[key] ?? key,
-      status,
-      statusLabel: committeeTraceStatusLabel(status),
-      statusClass: committeeTraceStatusClass(status),
-    };
-  });
 });
 
 const committeeDebateCards = computed(() => {
@@ -1905,7 +1717,6 @@ const summaryCards = computed(() => {
                 splitSummaryLines(renderedContent)
                   .map((line) => line.replace(/^\-\s*/, "").trim())
                   .find((line) => line.length > 0 && !/^(?:代表性市场|参考依据|主判断)[:：]\s*$/u.test(line)) ?? "当前维度暂无摘要。",
-              tagClass: "analysis-badge--slate",
               important: false,
             }
           : lines[0] ?? parseInsightLine("当前维度暂无摘要。"),
@@ -2290,32 +2101,6 @@ function schedulerAgentDotClass(status: string): string {
   }
 }
 
-function committeeTraceStatusLabel(status: "completed" | "running" | "failed" | "pending"): string {
-  switch (status) {
-    case "completed":
-      return "已完成";
-    case "running":
-      return "执行中";
-    case "failed":
-      return "已失败";
-    case "pending":
-      return "待执行";
-  }
-}
-
-function committeeTraceStatusClass(status: "completed" | "running" | "failed" | "pending"): string {
-  switch (status) {
-    case "completed":
-      return "status-pill--success";
-    case "running":
-      return "status-pill--loading";
-    case "failed":
-      return "status-pill--danger";
-    case "pending":
-      return "status-pill--neutral";
-  }
-}
-
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
@@ -2337,7 +2122,6 @@ function splitSummaryLines(value: string): string[] {
 function parseInsightLine(value: string, fallbackTag = "主判断"): {
   tag: string;
   text: string;
-  tagClass: string;
   important: boolean;
 } {
   const normalized = value.trim();
@@ -2345,7 +2129,6 @@ function parseInsightLine(value: string, fallbackTag = "主判断"): {
     return {
       tag: fallbackTag,
       text: "",
-      tagClass: "analysis-badge--slate",
       important: false,
     };
   }
@@ -2358,7 +2141,6 @@ function parseInsightLine(value: string, fallbackTag = "主判断"): {
   return {
     tag,
     text,
-    tagClass: extractedTag ? "analysis-badge--accent" : "analysis-badge--slate",
     important,
   };
 }
@@ -2406,14 +2188,11 @@ function parseMarketSentimentReferences(value: string): Array<{ index: number; t
 function buildInsightDisplay(value: string): {
   focusTag: string;
   primaryReason: string;
-  primaryBadgeLabel: string;
-  primaryBadgeClass: string;
   primaryReasonClass: string;
   highlightLead: boolean;
   secondaryReasons: Array<{
     tag: string;
     text: string;
-    tagClass: string;
     important: boolean;
   }>;
 } {
@@ -2424,8 +2203,6 @@ function buildInsightDisplay(value: string): {
   return {
     focusTag: focusItem ? focusItem.tag : "",
     primaryReason: primary.text,
-    primaryBadgeLabel: primary.tag,
-    primaryBadgeClass: primary.tagClass,
     primaryReasonClass: primary.important ? "summary-lead--featured" : "",
     highlightLead: primary.important,
     secondaryReasons,
