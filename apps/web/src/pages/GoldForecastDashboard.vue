@@ -1,0 +1,2359 @@
+<template>
+  <main class="text-ui-surface min-h-screen" :class="marketSessionPageClass">
+    <div class="dashboard-shell mx-auto min-h-screen w-full max-w-[1600px] px-4 py-4 sm:px-6 lg:px-8 lg:py-6" :class="marketSessionPageClass">
+      <header class="dashboard-panel hero-panel relative overflow-hidden rounded-[32px] px-5 py-6 sm:px-6 sm:py-7 lg:px-8 lg:py-8" :class="marketSessionPageClass">
+        <div class="hero-panel__accent-overlay" />
+
+        <div class="relative space-y-6">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="flex flex-wrap items-center gap-3">
+            <span class="status-pill" :class="statusPillClass">{{ stateLabel }}</span>
+            <span class="status-pill" :class="marketSessionClass">{{ marketSessionLabel }}</span>
+            </div>
+          </div>
+
+          <div v-if="forecast" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            <span v-for="chip in heroChips" :key="chip.label" class="data-chip">
+              <span class="data-chip__label">{{ chip.label }}</span>
+              <span class="data-chip__value">{{ chip.value }}</span>
+            </span>
+          </div>
+          <div v-else class="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            <span class="data-chip data-chip--placeholder">等待最新研究数据</span>
+            <span class="data-chip data-chip--placeholder">等待方向信号</span>
+            <span class="data-chip data-chip--placeholder">等待置信度快照</span>
+            <span class="data-chip data-chip--placeholder">等待执行计划</span>
+            <span class="data-chip data-chip--placeholder">等待验证状态</span>
+          </div>
+
+          <div v-if="forecast" class="grid gap-4">
+            <section class="hero-summary-panel">
+              <div class="hero-summary-grid">
+                <div class="hero-summary-column hero-summary-column--lead">
+                  <div class="space-y-2">
+                    <p class="panel-title">当前价格</p>
+                    <p class="price-display">
+                      {{ forecast ? formatPrice(forecast.current_price) : "—" }}
+                    </p>
+                    <p class="text-ui-body-sm">
+                      XAUUSD · {{ forecast ? forecast.symbol : "等待 TradingView 快照" }}
+                    </p>
+                  </div>
+
+                  <div class="mt-4 flex flex-wrap gap-3">
+                    <span class="status-pill" :class="schedulerStatusClass">
+                      {{ schedulerStatusLabel }}
+                    </span>
+                    <span v-if="schedulerStatus" class="status-pill status-pill--neutral">
+                      {{ schedulerStageLabel }}
+                    </span>
+                    <span v-if="schedulerStatus" class="status-pill status-pill--neutral">
+                      最新执行 {{ latestExecutionTime }}
+                    </span>
+                  </div>
+
+                  <p v-if="statusErrorMessage" class="mt-3 text-ui-body-sm text-ui-warning">
+                    {{ statusErrorMessage }}
+                  </p>
+
+                  <div v-if="schedulerAgentChips.length > 0" class="hero-summary-agent-divider mt-4" aria-hidden="true" />
+                  <div v-if="schedulerAgentChips.length > 0" class="hero-summary-agent-strip mt-4">
+                    <p class="hero-summary-agent-title">智能体状态</p>
+                    <div class="hero-summary-agent-list">
+                      <span v-for="chip in schedulerAgentChips" :key="chip.label" class="agent-state-chip" :title="chip.value">
+                        <span class="agent-state-chip__dot" :class="chip.dotClass" />
+                        <span class="agent-state-chip__label">{{ chip.label }}</span>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="hero-summary-column hero-summary-column--direction">
+                  <div class="flex items-center justify-between gap-3">
+                    <div class="space-y-1">
+                      <p class="metric-label">当日方向</p>
+                      <span class="text-ui-meta">核心结论</span>
+                    </div>
+                    <span class="metric-label">主判断</span>
+                  </div>
+                  <div class="mt-3 flex flex-wrap items-center gap-3">
+                    <span class="status-pill hero-summary-direction-pill" :class="directionClass">{{ directionLabel }}</span>
+                    <span class="confidence-chip hero-summary-confidence-chip">
+                      <span class="confidence-chip__label">置信度</span>
+                      <span class="confidence-chip__value">{{ forecast ? formatPercent(forecast.confidence_score) : "0%" }}</span>
+                    </span>
+                  </div>
+                  <div
+                    class="confidence-scale mt-3"
+                    role="progressbar"
+                    :aria-valuenow="confidenceValue"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    :aria-label="forecast ? `置信度 ${formatPercent(forecast.confidence_score)}，总量 100%` : '置信度 0%，总量 100%'"
+                  >
+                    <div class="confidence-scale__track">
+                      <div class="confidence-scale__fill" :style="confidenceBarStyle" />
+                    </div>
+                    <div class="confidence-scale__labels">
+                      <span>0%</span>
+                      <span>100%</span>
+                    </div>
+                  </div>
+                  <div class="mt-4 space-y-2 text-ui-body-md">
+                    <p class="hero-summary-note">主判断：{{ directionLabel }}，置信度 {{ forecast ? formatPercent(forecast.confidence_score) : "0%" }}。</p>
+                    <p v-if="forecast" class="hero-summary-note">持有周期：{{ forecast.holding_period }}</p>
+                  </div>
+                </div>
+
+                <div class="hero-summary-column hero-summary-column--meta">
+                  <div class="flex items-center justify-between gap-3">
+                    <div class="space-y-1">
+                      <p class="metric-label">实时元数据</p>
+                      <span class="text-ui-meta">来源与时间</span>
+                    </div>
+                    <span class="metric-label">元数据</span>
+                  </div>
+                  <dl class="mt-4 space-y-3">
+                    <div v-for="metric in heroMetaCards" :key="metric.label" class="hero-summary-row">
+                      <dt class="hero-summary-row__label">{{ metric.label }}</dt>
+                      <dd class="hero-summary-row__value">{{ metric.value }}</dd>
+                    </div>
+                  </dl>
+                </div>
+              </div>
+
+            </section>
+          </div>
+
+        </div>
+      </header>
+
+      <DashboardStateBanner
+        v-if="isLoading"
+        variant="loading"
+        eyebrow="加载中"
+        title="正在加载最新 TradingView 研究结果"
+        :message="LOADING_FORECAST_MESSAGE"
+        detail="加载完成后会自动刷新本页内容。"
+      >
+        <template #actions>
+          <div class="hero-status-strip">
+            <span class="hero-status-strip__dot hero-status-strip__dot--loading" />
+            <span class="text-ui-meta text-ui-surface-soft">等待 TradingView 快照</span>
+          </div>
+        </template>
+      </DashboardStateBanner>
+
+      <DashboardStateBanner
+        v-else-if="errorMessage"
+        variant="error"
+        eyebrow="加载失败"
+        title="TradingView 实时行情暂不可用"
+        :message="errorMessage"
+        detail="系统会继续自动轮询，等待下一次可用快照恢复展示。"
+      />
+
+      <DashboardStateBanner
+        v-else-if="!forecast"
+        variant="empty"
+        eyebrow="暂无结果"
+        title="尚无可展示的 TradingView 研究快照"
+        :message="EMPTY_FORECAST_MESSAGE"
+      />
+
+      <div v-if="forecast" class="mt-5 space-y-5">
+        <section class="dashboard-panel rounded-[28px] px-5 py-6 sm:px-6 lg:px-8">
+          <DashboardSectionHeader
+            eyebrow="Execution Plan"
+            title="入场、止盈、止损与持有框架"
+            description="这里直接给出可执行的研究结论，便于快速对齐日内计划与中长期持有思路。"
+            badge="trade setup"
+          />
+
+          <div class="mt-4 grid gap-4 lg:grid-cols-3">
+            <article v-for="card in tradeLevelCards" :key="card.label" class="trade-field-row">
+              <span class="metric-label">{{ card.label }}</span>
+              <p class="trade-field-row__value">{{ card.value }}</p>
+            </article>
+          </div>
+
+          <div class="mt-4 grid gap-4 xl:grid-cols-3">
+            <article class="trade-field-row">
+              <span class="metric-label">风险回报比</span>
+              <p class="trade-field-row__value">{{ riskRewardRatio }}</p>
+            </article>
+            <article class="trade-field-row">
+              <span class="metric-label">持有周期</span>
+              <p class="trade-field-row__value">{{ forecast.holding_period }}</p>
+            </article>
+            <article class="trade-field-row trade-field-row--stacked">
+              <span class="metric-label">日内 / 中长期</span>
+              <div class="summary-flat-row__body">
+                <p class="summary-flat-row__text leading-7">{{ forecast.intraday_action }}</p>
+                <p class="mt-3 text-ui-body-md">{{ forecast.long_term_action }}</p>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="dashboard-panel rounded-[28px] p-5 sm:p-6">
+          <DashboardSectionHeader
+            eyebrow="Research Evidence"
+            title="研究证据包与委员会输入"
+            description="先看 specialist 证据，再进入对抗式辩论。所有观点都必须回到这里的结构化事实。"
+            badge="evidence package"
+          />
+
+          <div v-if="committeeDebateCards.length > 0" class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            <article
+              v-for="item in committeeDebateCards"
+              :key="item.id"
+              class="metric-card metric-card--soft surface-card-dark--soft"
+            >
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div class="space-y-1">
+                  <p class="text-ui-card-title">{{ item.title }}</p>
+                  <p class="text-ui-meta text-ui-surface-muted">{{ item.dataFreshness }}</p>
+                </div>
+                <span
+                  class="status-pill"
+                  :class="item.toolStatus === 'ok' ? 'status-pill--success' : item.toolStatus === 'degraded' ? 'status-pill--loading' : 'status-pill--danger'"
+                >
+                  {{ item.toolStatusLabel }}
+                </span>
+              </div>
+
+              <div class="mt-4 flex flex-wrap gap-x-5 gap-y-2">
+                <p class="text-ui-meta">信号 <span class="text-ui-surface-soft">{{ item.signal }}</span></p>
+                <p class="text-ui-meta">置信度 <span class="text-ui-surface-soft">{{ item.confidence }}</span></p>
+              </div>
+
+              <div class="mt-4 space-y-3 text-ui-body-md">
+                <div>
+                  <p class="text-ui-meta text-ui-surface-muted">关键证据</p>
+                  <p class="mt-1 whitespace-pre-line">{{ item.keyEvidence.join("；") || "—" }}</p>
+                </div>
+                <div>
+                  <p class="text-ui-meta text-ui-surface-muted">风险信号</p>
+                  <p class="mt-1 whitespace-pre-line">{{ item.riskFactors.join("；") || "—" }}</p>
+                </div>
+                <div>
+                  <p class="text-ui-meta text-ui-surface-muted">失效条件</p>
+                  <p class="mt-1 whitespace-pre-line">{{ item.invalidationConditions.join("；") || "—" }}</p>
+                </div>
+                <div>
+                  <p class="text-ui-meta text-ui-surface-muted">重要价位</p>
+                  <p class="mt-1 whitespace-pre-line">{{ item.importantLevels.join("；") || "—" }}</p>
+                </div>
+              </div>
+            </article>
+          </div>
+
+          <div v-else class="metric-card metric-card--empty surface-card-dark--empty mt-4 text-ui-body-sm">
+            当前还没有可展示的证据包。
+          </div>
+        </section>
+
+        <section class="dashboard-panel rounded-[28px] p-5 sm:p-6">
+          <DashboardSectionHeader
+            eyebrow="Workflow Reasoning"
+            title="两轮对抗式辩论"
+            description="Opening case 先建立最强论点，再通过 rebuttal 逐点回应对方，最后收束为最终立场。"
+            badge="two-round debate"
+          />
+
+          <div class="mt-4 space-y-6">
+            <div>
+              <div class="flex items-center justify-between gap-3">
+                <p class="metric-label">Round 1 · Opening Case</p>
+                <span class="text-ui-meta text-ui-surface-muted">bull / bear</span>
+              </div>
+              <div class="mt-3 grid gap-4 xl:grid-cols-2">
+                <article
+                  v-for="item in committeeOpeningCases"
+                  :key="`${item.side}-${item.thesis}`"
+                  class="metric-card metric-card--soft surface-card-dark--soft"
+                >
+                  <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div class="space-y-1">
+                      <p class="text-ui-card-title">{{ item.sideLabel }}</p>
+                      <p class="text-ui-meta text-ui-surface-muted">{{ item.entry_zone }}</p>
+                    </div>
+                    <span class="status-pill" :class="item.stanceClass">{{ DIRECTION_LABELS[item.side === 'bull' ? 'bullish' : 'bearish'] }}</span>
+                  </div>
+                  <p class="mt-3 text-ui-body-md">{{ item.thesis }}</p>
+                  <dl class="mt-4 grid gap-3">
+                    <div class="metric-card metric-card--embedded">
+                      <dt class="metric-label">止损 / 失效</dt>
+                      <dd class="mt-1 text-ui-body-md">{{ item.stop_loss_or_invalidation }}</dd>
+                    </div>
+                    <div class="metric-card metric-card--embedded">
+                      <dt class="metric-label">目标区间</dt>
+                      <dd class="mt-1 text-ui-body-md">{{ item.target_zone }}</dd>
+                    </div>
+                    <div class="metric-card metric-card--embedded">
+                      <dt class="metric-label">风险回报</dt>
+                      <dd class="mt-1 text-ui-body-md">{{ item.risk_reward != null ? `${item.risk_reward.toFixed(2)} R` : "—" }}</dd>
+                    </div>
+                    <div class="metric-card metric-card--embedded">
+                      <dt class="metric-label">弱点承认</dt>
+                      <dd class="mt-1 text-ui-body-md">{{ item.weakness_acknowledged.join("；") || "—" }}</dd>
+                    </div>
+                  </dl>
+                  <div class="mt-4 space-y-2">
+                    <p class="text-ui-meta text-ui-surface-muted">支持论据</p>
+                    <p class="text-ui-body-md">{{ item.supporting_arguments.join("；") || "—" }}</p>
+                  </div>
+                </article>
+              </div>
+            </div>
+
+            <div>
+              <div class="flex items-center justify-between gap-3">
+                <p class="metric-label">Round 2 · Rebuttal</p>
+                <span class="text-ui-meta text-ui-surface-muted">逐点回应</span>
+              </div>
+              <div class="mt-3 grid gap-4 xl:grid-cols-2">
+                <article
+                  v-for="item in committeeRebuttals"
+                  :key="`${item.side}-${item.responds_to_side}-${item.confidence_change ?? 0}`"
+                  class="metric-card metric-card--soft surface-card-dark--soft"
+                >
+                  <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div class="space-y-1">
+                      <p class="text-ui-card-title">{{ item.sideLabel }}</p>
+                      <p class="text-ui-meta text-ui-surface-muted">{{ item.respondLabel }}</p>
+                    </div>
+                    <span class="status-pill" :class="item.stanceClass">Rebuttal</span>
+                  </div>
+                  <div class="mt-4 grid gap-3">
+                    <div class="metric-card metric-card--embedded">
+                      <dt class="metric-label">驳斥点</dt>
+                      <dd class="mt-1 text-ui-body-md">{{ item.rebutted_points.join("；") || "—" }}</dd>
+                    </div>
+                    <div class="metric-card metric-card--embedded">
+                      <dt class="metric-label">接受点</dt>
+                      <dd class="mt-1 text-ui-body-md">{{ item.accepted_points.join("；") || "—" }}</dd>
+                    </div>
+                    <div class="metric-card metric-card--embedded">
+                      <dt class="metric-label">计划调整</dt>
+                      <dd class="mt-1 text-ui-body-md">{{ item.plan_adjustments.join("；") || "—" }}</dd>
+                    </div>
+                    <div class="metric-card metric-card--embedded">
+                      <dt class="metric-label">置信度变化</dt>
+                      <dd class="mt-1 text-ui-body-md">
+                        {{ item.confidence_change != null ? `${item.confidence_trend} (${formatSignedPnl(item.confidence_change)})` : item.confidence_trend }}
+                      </dd>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </div>
+
+            <div>
+              <div class="flex items-center justify-between gap-3">
+                <p class="metric-label">Round 3 · Final Position</p>
+                <span class="text-ui-meta text-ui-surface-muted">终局立场</span>
+              </div>
+              <div class="mt-3 grid gap-4 xl:grid-cols-2">
+                <article
+                  v-for="item in committeeFinalPositions"
+                  :key="`${item.side}-${item.confidence}`"
+                  class="metric-card metric-card--soft surface-card-dark--soft"
+                >
+                  <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div class="space-y-1">
+                      <p class="text-ui-card-title">{{ item.sideLabel }}</p>
+                      <p class="text-ui-meta text-ui-surface-muted">{{ item.stance }}</p>
+                    </div>
+                    <span class="status-pill" :class="item.stanceClass">置信度 {{ formatPercent(item.confidence) }}</span>
+                  </div>
+                  <div class="mt-4 grid gap-3">
+                    <div class="metric-card metric-card--embedded">
+                      <dt class="metric-label">采纳论据</dt>
+                      <dd class="mt-1 text-ui-body-md">{{ item.adopted_arguments.join("；") || "—" }}</dd>
+                    </div>
+                    <div class="metric-card metric-card--embedded">
+                      <dt class="metric-label">放弃条件</dt>
+                      <dd class="mt-1 text-ui-body-md">{{ item.abandon_conditions.join("；") || "—" }}</dd>
+                    </div>
+                    <div class="metric-card metric-card--embedded">
+                      <dt class="metric-label">计划调整</dt>
+                      <dd class="mt-1 text-ui-body-md">{{ item.plan_adjustments.join("；") || "—" }}</dd>
+                    </div>
+                    <div class="metric-card metric-card--embedded">
+                      <dt class="metric-label">拒绝论据</dt>
+                      <dd class="mt-1 text-ui-body-md">{{ item.rejected_arguments.join("；") || "—" }}</dd>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="dashboard-panel rounded-[28px] p-5 sm:p-6">
+          <DashboardSectionHeader
+            eyebrow="Decision Control"
+            title="主席仲裁与验证"
+            description="主席不是摘要器，而是裁决者。它综合证据包、Opening、Rebuttal 和 Final Position，输出最终 bias 和可执行性。"
+            badge="chair decision"
+          />
+
+          <div class="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
+            <article class="metric-card metric-card--soft surface-card-dark--soft p-5">
+              <DashboardSectionHeader eyebrow="final bias" title="终局裁决" heading-tag="h3">
+                <template #actions>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="status-pill" :class="committeeActionabilityToneClass">{{ committeeActionabilityLabel }}</span>
+                    <span class="status-pill" :class="committeeValidationToneClass">{{ committeeValidationLabel }}</span>
+                  </div>
+                </template>
+              </DashboardSectionHeader>
+
+              <div v-if="committeeTradePlan" class="mt-4 flex flex-wrap gap-2">
+                <span class="metric-label">{{ committeeTradePlan.title }}</span>
+                <span class="metric-label">{{ committeeTradePlan.biasLabel }}</span>
+              </div>
+
+              <div class="mt-4 grid gap-3 sm:grid-cols-2">
+                <div class="metric-card metric-card--embedded">
+                  <dt class="metric-label">胜出方</dt>
+                  <dd class="mt-1 text-ui-body-md">{{ committeeWinningSideLabel }}</dd>
+                </div>
+                <div class="metric-card metric-card--embedded">
+                  <dt class="metric-label">最终置信度</dt>
+                  <dd class="mt-1 text-ui-body-md">{{ forecast ? formatPercent(forecast.confidence_score) : "—" }}</dd>
+                </div>
+                <div class="metric-card metric-card--embedded">
+                  <dt class="metric-label">采纳论据</dt>
+                  <dd class="mt-1 text-ui-body-md">{{ committeeAdoptedArguments.join("；") || "—" }}</dd>
+                </div>
+                <div class="metric-card metric-card--embedded">
+                  <dt class="metric-label">拒绝论据</dt>
+                  <dd class="mt-1 text-ui-body-md">{{ committeeRejectedArguments.join("；") || "—" }}</dd>
+                </div>
+              </div>
+
+              <p class="mt-4 text-ui-body-md">
+                {{ committeeDecision?.decision_summary ?? "当前尚无主席裁决摘要。" }}
+              </p>
+
+              <div class="mt-5 space-y-3">
+                <p class="text-ui-meta text-ui-surface-muted">最终交易计划</p>
+                <div v-if="committeeTradePlan && committeeTradePlan.tradePlan" class="grid gap-3 sm:grid-cols-2">
+                  <div v-for="row in committeeTradePlanRows" :key="row.label" class="metric-card metric-card--embedded">
+                    <dt class="metric-label">{{ row.label }}</dt>
+                    <dd class="mt-1 text-ui-body-md">{{ row.value }}</dd>
+                  </div>
+                </div>
+                <div v-else class="metric-card metric-card--empty surface-card-dark--empty text-ui-body-sm">
+                  {{ committeeDecision?.wait_conditions?.length ? committeeDecision.wait_conditions.join("；") : "当前不适合直接入场，等待条件不足。" }}
+                </div>
+              </div>
+            </article>
+
+            <aside class="space-y-4">
+              <article class="dashboard-panel rounded-[28px] p-4">
+                <DashboardSectionHeader eyebrow="Validation" title="规则校验与修复" heading-tag="h3">
+                  <template #actions>
+                    <span class="status-pill" :class="committeeValidationToneClass">{{ committeeValidationLabel }}</span>
+                  </template>
+                </DashboardSectionHeader>
+
+                <p class="mt-3 text-ui-body-md">{{ committeeValidationSummary }}</p>
+
+                <div class="mt-4 space-y-3">
+                  <div v-if="committeeValidationWarnings.length > 0" class="space-y-2">
+                    <p class="text-ui-meta text-ui-surface-muted">warnings</p>
+                    <div v-for="(warning, index) in committeeValidationWarnings" :key="`warning-${index}-${warning}`" class="metric-card metric-card--embedded">
+                      <p class="text-ui-body-md">{{ warning }}</p>
+                    </div>
+                  </div>
+                  <div v-if="committeeValidationErrors.length > 0" class="space-y-2">
+                    <p class="text-ui-meta text-ui-surface-muted">errors</p>
+                    <div v-for="(error, index) in committeeValidationErrors" :key="`error-${index}-${error}`" class="metric-card metric-card--embedded">
+                      <p class="text-ui-body-md">{{ error }}</p>
+                    </div>
+                  </div>
+                </div>
+              </article>
+            </aside>
+          </div>
+        </section>
+
+        <section class="dashboard-panel rounded-[28px] p-5 sm:p-6">
+          <DashboardSectionHeader eyebrow="Agent Consensus" title="多智能体共识矩阵" />
+
+          <div class="mt-4 space-y-3 lg:hidden">
+            <article
+              v-for="vote in forecast.agent_votes"
+              :key="`${vote.agent}-${vote.rationale}`"
+              class="metric-card metric-card--soft"
+            >
+              <div class="flex flex-wrap items-center justify-between gap-3">
+                <p class="text-ui-numeric">{{ agentLabel(vote.agent) }}</p>
+                <span class="status-pill" :class="voteDirectionClass(vote.direction)">
+                  {{ DIRECTION_LABELS[vote.direction] }}
+                </span>
+              </div>
+
+              <dl class="mt-4 grid gap-3">
+                <div class="metric-card metric-card--embedded">
+                  <dt class="metric-label">置信度</dt>
+                  <dd class="mt-1 text-ui-numeric">{{ formatPercent(vote.confidence) }}</dd>
+                </div>
+                <div class="metric-card metric-card--embedded">
+                  <dt class="metric-label">理由</dt>
+                  <dd class="mt-1 break-words text-ui-body-md">{{ vote.rationale }}</dd>
+                </div>
+              </dl>
+            </article>
+
+            <div v-if="forecast.agent_votes.length === 0" class="metric-card metric-card--empty surface-card-dark--empty text-center text-ui-body-sm">
+              当前结果未返回智能体投票。
+            </div>
+          </div>
+
+          <div class="dashboard-table-shell mt-4 hidden lg:block">
+            <table class="min-w-full">
+              <thead class="dashboard-table-head">
+                <tr>
+                  <th class="dashboard-table-head-cell">智能体</th>
+                  <th class="dashboard-table-head-cell">方向</th>
+                  <th class="dashboard-table-head-cell">置信度</th>
+                  <th class="dashboard-table-head-cell">理由</th>
+                </tr>
+              </thead>
+              <tbody class="dashboard-table-body">
+                <tr
+                  v-for="vote in forecast.agent_votes"
+                  :key="`${vote.agent}-${vote.rationale}`"
+                  class="dashboard-table-row"
+                >
+                  <td class="dashboard-table-cell text-ui-numeric">{{ agentLabel(vote.agent) }}</td>
+                  <td class="whitespace-nowrap px-4 py-3">
+                    <span class="status-pill" :class="voteDirectionClass(vote.direction)">
+                      {{ DIRECTION_LABELS[vote.direction] }}
+                    </span>
+                  </td>
+                  <td class="dashboard-table-cell text-ui-numeric">{{ formatPercent(vote.confidence) }}</td>
+                  <td class="dashboard-table-cell--wrap">{{ vote.rationale }}</td>
+                </tr>
+                <tr v-if="forecast.agent_votes.length === 0">
+                  <td colspan="4" class="px-4 py-6 text-center text-ui-body-sm">
+                    当前结果未返回智能体投票。
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="dashboard-panel rounded-[28px] px-5 py-6 sm:px-6 lg:px-8">
+          <DashboardSectionHeader
+            eyebrow="Window Outlook"
+            title="时间窗展望"
+            description="每个时间窗单独展示方向与补充判断，便于快速扫读。"
+            badge="区间判断"
+          />
+
+          <div v-if="windowDirectionCards.length > 0" class="mt-4 grid gap-4 lg:grid-cols-2">
+            <article
+              v-for="window in windowDirectionCards"
+              :key="window.label"
+              class="summary-card summary-card--flat surface-card-dark surface-card-dark--soft rounded-[28px] px-4 py-4 sm:px-5"
+            >
+              <div class="window-card-header">
+                <p class="window-card-title text-ui-card-title">{{ window.label }}</p>
+                <div class="window-card-chips">
+                  <span class="status-pill" :class="window.directionClass">{{ window.directionLabel }}</span>
+                  <p class="text-ui-meta">强度 <span class="text-ui-surface-soft">{{ window.strength }}</span></p>
+                  <p class="text-ui-meta">置信度 <span class="text-ui-surface-soft">{{ window.confidence }}</span></p>
+                  <p v-if="window.focusTag" class="text-ui-meta">{{ window.focusTag }}</p>
+                </div>
+              </div>
+
+              <div class="window-card-body">
+                <div class="window-card-main">
+                  <span class="summary-stance-label">主判断</span>
+                  <p class="window-card-copy text-ui-body-md">{{ window.primaryReason }}</p>
+                </div>
+
+                <div v-if="window.secondaryReasons.length > 0" class="window-card-secondary">
+                  <div class="flex items-center justify-between gap-3">
+                    <span class="summary-stance-label">补充判断</span>
+                    <span class="text-ui-meta">agent 补充</span>
+                  </div>
+                  <div class="space-y-2">
+                    <div
+                      v-for="item in window.secondaryReasons"
+                      :key="`${window.label}-${item.tag}-${item.text}`"
+                      class="summary-flat-row summary-flat-row--evidence"
+                      :class="[
+                        item.important ? 'summary-flat-row--highlight' : '',
+                        item.important ? 'window-insight--important' : '',
+                      ]"
+                    >
+                      <span class="metric-label">{{ item.tag }}</span>
+                      <p class="summary-flat-row__text">{{ item.text }}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.85fr)]">
+          <article class="dashboard-panel market-candle-shell rounded-[28px] p-5 sm:p-6">
+            <MarketCandlestickChart
+              :bars="marketBars"
+              :current-price="forecast?.current_price ?? null"
+              title="K线图"
+              subtitle="黄金日线结构"
+              description="TradingView 行情每 15 分钟抓取一次，展示最近日线结构、收盘节奏、波动区间与价格参考线。"
+            />
+          </article>
+
+          <aside class="space-y-4">
+            <article class="dashboard-panel rounded-[28px] p-5 sm:p-6">
+              <DashboardSectionHeader eyebrow="Research Metadata" title="研究元数据" badge="元数据" />
+
+              <div class="mt-4 space-y-3">
+                <div v-for="metric in supportCards" :key="metric.label" class="summary-flat-row">
+                  <span class="metric-label">{{ metric.label }}</span>
+                  <p class="summary-flat-row__text">{{ metric.value }}</p>
+                </div>
+              </div>
+            </article>
+          </aside>
+        </section>
+
+        <section class="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(380px,0.8fr)]">
+          <article class="dashboard-panel rounded-[28px] p-5 sm:p-6">
+            <DashboardSectionHeader
+              eyebrow="Research Summary"
+              title="本轮 XAUUSD 研究结论"
+              :description="`结论时间：${formatDateTime(forecast.reference_time)}`"
+              badge="结构化摘要"
+            />
+
+            <div class="mt-4 space-y-4">
+              <article
+                v-for="section in orderedSummaryCards"
+                :key="section.key"
+                class="summary-card summary-card--flat surface-card-dark surface-card-dark--soft rounded-[28px] px-4 py-4 sm:px-5"
+                :class="[section.accentClass]"
+              >
+                <div class="flex flex-wrap items-center justify-between gap-3 border-b surface-divider pb-3">
+                  <p class="metric-label">{{ section.title }}</p>
+                  <div class="summary-stance-row summary-stance-row--compact">
+                    <span class="summary-stance-label">综合评价</span>
+                    <span class="summary-stance summary-stance--featured" :class="section.stanceClass">
+                      {{ section.stanceTagLabel }}
+                    </span>
+                  </div>
+                </div>
+
+              <div class="summary-card__sections mt-4 divide-y">
+                  <div class="py-3">
+                    <div class="summary-stance-row">
+                      <span class="summary-stance-label">主判断</span>
+                      <span v-if="section.hasImportantLine" class="metric-label">重点</span>
+                    </div>
+                    <p class="mt-2 text-ui-body-md">{{ section.leadLine.text }}</p>
+                  </div>
+
+                  <div
+                    v-if="section.key !== 'market_sentiment_summary' && section.detailLines.length > 0"
+                    class="py-3 space-y-2"
+                  >
+                    <div
+                      v-for="(line, lineIndex) in section.detailLines"
+                      :key="`${section.key}-${lineIndex}-${line.text}`"
+                      class="summary-flat-row"
+                      :class="line.important ? 'summary-flat-row--highlight' : ''"
+                    >
+                      <span class="metric-label">{{ line.tag }}</span>
+                      <p class="summary-flat-row__text">{{ line.text }}</p>
+                    </div>
+                  </div>
+
+                  <div v-if="section.key === 'market_sentiment_summary' && section.referenceItems.length > 0" class="py-3 space-y-2">
+                    <div class="summary-evidence-title">参考依据</div>
+                    <div
+                      v-for="item in section.referenceItems"
+                      :key="`${section.key}-reference-${item.index}-${item.text}`"
+                      class="summary-flat-row summary-flat-row--evidence"
+                    >
+                      <div class="summary-evidence-index">{{ String(item.index).padStart(2, "0") }}</div>
+                      <div class="summary-flat-row__body">
+                        <div class="summary-flat-row__text">{{ item.text }}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div v-else-if="section.newsHighlights.length > 0" class="py-3 space-y-2">
+                    <div class="summary-evidence-title">代表性标题</div>
+                    <div
+                      v-for="item in section.newsHighlights"
+                      :key="`${section.key}-headline-${item.index}-${item.text}`"
+                      class="summary-flat-row summary-flat-row--evidence"
+                    >
+                      <div class="summary-evidence-index">{{ String(item.index).padStart(2, "0") }}</div>
+                      <div class="summary-flat-row__body">
+                        <div class="text-ui-meta">{{ item.source }}</div>
+                        <div class="mt-1 text-ui-body-md">{{ item.text }}</div>
+                      </div>
+                    </div>
+                  </div>
+                  <div v-else-if="section.evidenceItems.length > 0" class="py-3 space-y-2">
+                    <div class="summary-evidence-title">参考依据</div>
+                    <div
+                      v-for="item in section.evidenceItems"
+                      :key="`${section.key}-evidence-${item.index}-${item.text}`"
+                      class="summary-flat-row summary-flat-row--evidence"
+                    >
+                      <div class="summary-evidence-index">{{ String(item.index).padStart(2, "0") }}</div>
+                      <div class="summary-flat-row__body">
+                        <div class="summary-flat-row__text">{{ item.text }}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                </div>
+              </article>
+            </div>
+          </article>
+
+          <aside class="dashboard-panel risk-panel rounded-[28px] p-5 sm:p-6">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <p class="panel-title risk-panel__title">Risk Notes</p>
+              <span class="text-ui-warning">重点关注</span>
+            </div>
+
+            <div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+              <div class="metric-card metric-card--soft metric-card--risk-meta">
+                <p class="metric-label">风险生成时间</p>
+                <p class="metric-value mt-1 text-ui-body-md">{{ formatDateTime(forecast.reference_time) }}</p>
+              </div>
+              <div class="metric-card metric-card--soft metric-card--risk-meta">
+                <p class="metric-label">数据参考时间</p>
+                <p class="metric-value mt-1 text-ui-body-md">{{ formatDateTime(forecast.data_timestamp) }}</p>
+              </div>
+            </div>
+
+            <ul class="mt-4 space-y-3">
+              <li
+                v-for="(note, index) in riskNoteItems"
+                :key="`${index}-${note.text}`"
+                class="risk-note-card"
+                :class="note.toneClass"
+              >
+                <div class="flex items-center justify-between gap-3">
+                  <div class="flex items-center gap-2">
+                    <span class="risk-note-index">{{ String(index + 1).padStart(2, "0") }}</span>
+                    <p class="risk-note-title">风险条目</p>
+                  </div>
+                  <span class="risk-note-tag">{{ note.tag }}</span>
+                </div>
+                <p class="risk-note-body mt-2 whitespace-pre-line">
+                  {{ note.text }}
+                </p>
+                <div class="mt-3 flex items-center justify-between gap-3 text-ui-meta">
+                  <span>生成时间</span>
+                  <span>{{ note.generatedAtLabel }}</span>
+                </div>
+              </li>
+              <li v-if="riskNoteItems.length === 0" class="metric-card metric-card--empty surface-card-dark--empty text-ui-body-sm">
+                当前结果未返回额外的风险提示。
+              </li>
+            </ul>
+          </aside>
+        </section>
+
+        <section class="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(340px,0.78fr)]">
+          <article class="dashboard-panel rounded-[28px] p-5 sm:p-6">
+            <DashboardSectionHeader
+              eyebrow="Forecast Evaluation"
+              title="每日 forecast 复盘与收益点数"
+              description="这里展示按收盘后评估写回的历史结果，包括每日收益点数、命中结果和结算价，供后续预测参考。"
+            >
+              <template #actions>
+                <span class="text-ui-meta">
+                  {{ isHistoryLoading ? "正在加载历史表现" : `${historyStats.evaluatedCount} / ${historyStats.totalCount} 已评估` }}
+                </span>
+              </template>
+            </DashboardSectionHeader>
+
+            <div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div class="metric-card metric-card--soft">
+                <p class="metric-label">历史 forecast 数</p>
+                <p class="metric-value mt-1">{{ historyStats.totalCount }}</p>
+              </div>
+              <div class="metric-card metric-card--soft">
+                <p class="metric-label">已评估数量</p>
+                <p class="metric-value mt-1">{{ historyStats.evaluatedCount }}</p>
+              </div>
+              <div class="metric-card metric-card--soft">
+                <p class="metric-label">累计收益点数</p>
+                <p class="metric-value mt-1">{{ formatPnlPoints(historyStats.totalPnl) }}</p>
+              </div>
+              <div class="metric-card metric-card--soft">
+                <p class="metric-label">命中率</p>
+                <p class="metric-value mt-1">{{ formatPercent(historyStats.winRate) }}</p>
+              </div>
+            </div>
+
+            <div class="history-summary-strip mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div class="history-summary-item">
+                <p class="metric-label">累计收益点数</p>
+                <p class="history-summary-value">{{ formatPnlPoints(historyStats.totalPnl) }}</p>
+              </div>
+              <div class="history-summary-item">
+                <p class="metric-label">平均每次收益</p>
+                <p class="history-summary-value">{{ formatPnlPoints(historyStats.averagePnl) }}</p>
+              </div>
+              <div class="history-summary-item">
+                <p class="metric-label">已评估 / 总数</p>
+                <p class="history-summary-value">{{ `${historyStats.evaluatedCount} / ${historyStats.totalCount}` }}</p>
+              </div>
+              <div class="history-summary-item">
+                <p class="metric-label">胜率</p>
+                <p class="history-summary-value">{{ formatPercent(historyStats.winRate) }}</p>
+              </div>
+            </div>
+
+            <div class="mt-4 rounded-[28px] border surface-divider surface-card-dark surface-card-dark--soft p-4">
+              <div class="flex items-center justify-between gap-3">
+                <div class="space-y-1">
+                  <p class="panel-title">收益图表</p>
+                  <h3 class="text-ui-card-title">每日评估收益点数</h3>
+                </div>
+                <span class="text-ui-meta">bar chart</span>
+              </div>
+
+              <div v-if="isHistoryLoading" class="mt-4 rounded-[20px] border surface-divider surface-card-dark--empty p-6 text-ui-body-sm">
+                历史表现正在加载。
+              </div>
+              <div v-else-if="historyErrorMessage" class="mt-4 rounded-[20px] border surface-card-dark--error p-6 text-ui-body-sm">
+                {{ historyErrorMessage }}
+              </div>
+              <div v-else-if="historyChart.bars.length === 0" class="mt-4 rounded-[20px] border border-dashed surface-divider surface-card-dark--empty p-6 text-ui-body-sm">
+                <template v-if="historyStats.totalCount > 0">
+                  当前已有 forecast 记录，但尚未生成可展示的收盘评估。定时任务会在美国收盘后按最新收盘日线回写；如果刚过收盘窗口，请等待下一轮维护。
+                </template>
+                <template v-else>
+                  当前没有已评估的历史 forecast，可以在后续收盘评估后查看图表。
+                </template>
+              </div>
+              <div v-else class="mt-4 overflow-x-auto rounded-[22px] border surface-divider surface-card-dark surface-card-dark--soft p-3">
+                <svg
+                  :viewBox="`0 0 ${historyChart.width} ${historyChart.height}`"
+                  class="h-[280px] w-full min-w-[840px]"
+                  role="img"
+                  aria-label="每日 forecast 收益点数图表"
+                >
+                  <defs>
+                    <linearGradient id="history-positive-gradient" x1="0%" y1="0%" x2="0%" y2="100%">
+                      <stop offset="0%" stop-color="var(--goldfx-history-positive-start)" stop-opacity="0.95" />
+                      <stop offset="100%" stop-color="var(--goldfx-history-positive-end)" stop-opacity="0.45" />
+                    </linearGradient>
+                    <linearGradient id="history-negative-gradient" x1="0%" y1="0%" x2="0%" y2="100%">
+                      <stop offset="0%" stop-color="var(--goldfx-history-negative-start)" stop-opacity="0.95" />
+                      <stop offset="100%" stop-color="var(--goldfx-history-negative-end)" stop-opacity="0.45" />
+                    </linearGradient>
+                  </defs>
+                  <line
+                    x1="24"
+                    :y1="historyChart.baselineY"
+                    x2="816"
+                    :y2="historyChart.baselineY"
+                    stroke="var(--goldfx-history-baseline)"
+                    stroke-width="1.2"
+                    stroke-dasharray="6 6"
+                  />
+                  <g v-for="bar in historyChart.bars" :key="`${bar.dateLabel}-${bar.value}`">
+                    <rect
+                      :x="bar.x"
+                      :y="bar.y"
+                      :width="bar.width"
+                      :height="bar.height"
+                      :fill="bar.fill"
+                      rx="10"
+                      ry="10"
+                    >
+                      <title>{{ `${bar.dateLabel} · ${bar.resultLabel} · ${bar.value} 点` }}</title>
+                    </rect>
+                    <text
+                      :x="bar.x + bar.width / 2"
+                      :y="bar.y + (bar.value.startsWith('-') ? bar.height + 18 : Math.max(bar.y - 10, 16))"
+                      text-anchor="middle"
+                      class="history-chart__value"
+                      font-size="11"
+                    >
+                      {{ bar.value }}
+                    </text>
+                    <text
+                      :x="bar.x + bar.width / 2"
+                      y="228"
+                      text-anchor="middle"
+                      class="history-chart__date"
+                      font-size="10"
+                    >
+                      {{ bar.dateLabel }}
+                    </text>
+                    <text
+                      :x="bar.x + bar.width / 2"
+                      y="242"
+                      text-anchor="middle"
+                      class="history-chart__result"
+                      font-size="9"
+                    >
+                      {{ bar.resultLabel }}
+                    </text>
+                  </g>
+                </svg>
+              </div>
+            </div>
+          </article>
+
+          <aside class="space-y-4">
+            <article class="dashboard-panel rounded-[28px] p-5">
+              <div class="flex items-center justify-between gap-3">
+                <div class="space-y-1">
+                  <p class="panel-title">最近结果</p>
+                  <h3 class="text-ui-card-title">逐日复盘</h3>
+                </div>
+                <span class="text-ui-meta">latest</span>
+              </div>
+
+              <div v-if="!isHistoryLoading && !historyErrorMessage && historyItemsDescending.length > 0" class="mt-4 space-y-3">
+                <article
+                  v-for="item in historyItemsDescending.slice(0, 6)"
+                  :key="`${item.forecast.id ?? item.forecast.reference_time}-${item.evaluation?.id ?? 'pending'}`"
+                  class="metric-card metric-card--soft"
+                >
+                  <div class="flex items-start justify-between gap-3">
+                    <div class="space-y-1">
+                      <p class="text-ui-meta">
+                        交易日：{{ formatDateShort(item.trading_day ?? item.forecast.reference_time) }}
+                      </p>
+                      <p class="text-ui-meta">
+                        预测：{{ formatDateTime(item.forecast.reference_time) }}
+                      </p>
+                      <p
+                        v-if="item.evaluation"
+                        class="text-ui-meta"
+                      >
+                        评估：{{ formatDateTime(item.evaluation.evaluated_at) }}
+                      </p>
+                      <p class="text-ui-card-title">
+                        {{ DIRECTION_LABELS[item.forecast.direction] }} · {{ formatPrice(item.forecast.current_price) }}
+                      </p>
+                    </div>
+                    <span
+                      class="status-pill"
+                      :class="item.evaluation ? (getHistoryDisplayPnlPoints(item) >= 0 ? 'status-pill--success' : 'status-pill--danger') : 'status-pill--neutral'"
+                    >
+                      {{ item.evaluation ? formatPnlPoints(getHistoryDisplayPnlPoints(item)) : "待评估" }}
+                    </span>
+                  </div>
+
+                  <dl class="mt-3 grid gap-2">
+                    <div class="metric-card metric-card--embedded">
+                      <dt class="metric-label">结论</dt>
+                      <dd class="mt-1 text-ui-body-md">
+                        {{ item.evaluation ? HISTORY_RESULT_LABELS[item.evaluation.result] ?? item.evaluation.result : "尚未完成收盘评估" }}
+                      </dd>
+                    </div>
+                    <div class="metric-card metric-card--embedded">
+                      <dt class="metric-label">结算价</dt>
+                      <dd class="mt-1 text-ui-body-md">
+                        {{ item.evaluation ? formatPrice(item.evaluation.settlement_price) : "—" }}
+                      </dd>
+                    </div>
+                  </dl>
+                </article>
+              </div>
+
+              <div v-else class="metric-card metric-card--empty surface-card-dark--empty mt-4 text-ui-body-sm">
+                暂无可展示的历史结果。
+              </div>
+            </article>
+
+            <article class="dashboard-panel rounded-[28px] p-5">
+              <div class="flex items-center justify-between gap-3">
+                <div class="space-y-1">
+                  <p class="panel-title">反馈回流</p>
+                  <h3 class="text-ui-card-title">历史评估摘要</h3>
+                </div>
+                <span class="text-ui-meta">context</span>
+              </div>
+              <div v-if="historyItemsDescending.length > 0" class="mt-4 space-y-2">
+                <div
+                  v-for="item in historyItemsDescending.slice(0, 4)"
+                  :key="`summary-${item.forecast.id ?? item.forecast.reference_time}`"
+                  class="summary-card summary-card--slate surface-card-dark surface-card-dark--soft text-ui-body-md"
+                >
+                  <div class="flex items-center justify-between gap-3">
+                    <div class="space-y-0.5">
+                      <p class="text-ui-meta">
+                        交易日：{{ formatDateShort(item.trading_day ?? item.forecast.reference_time) }}
+                      </p>
+                      <p class="text-ui-meta">
+                        预测：{{ formatDateTime(item.forecast.reference_time) }}
+                      </p>
+                      <p v-if="item.evaluation" class="text-ui-meta">
+                        评估：{{ formatDateTime(item.evaluation.evaluated_at) }}
+                      </p>
+                    </div>
+                    <div class="flex flex-col items-end gap-1">
+                      <p class="text-ui-meta">评估结果</p>
+                      <p class="text-ui-label">
+                        {{ item.evaluation ? HISTORY_RESULT_LABELS[item.evaluation.result] ?? item.evaluation.result : "待评估" }}
+                      </p>
+                    </div>
+                  </div>
+                  <p class="mt-2">
+                    {{ item.evaluation?.summary ?? "当前 forecast 尚未完成评估。" }}
+                  </p>
+                </div>
+              </div>
+              <div v-else class="metric-card metric-card--empty surface-card-dark--empty mt-4 text-ui-body-sm">
+                暂无摘要可以回流到后续预测。
+              </div>
+            </article>
+          </aside>
+        </section>
+
+        <section class="dashboard-panel rounded-[28px] p-5 sm:p-6">
+          <div class="flex items-center justify-between gap-3">
+            <div class="space-y-2">
+              <p class="panel-title">免责声明</p>
+              <h2 class="section-heading">仅供研究，不构成投资建议</h2>
+            </div>
+            <span class="text-ui-meta">Research only</span>
+          </div>
+          <p class="mt-4 break-words text-ui-body-md">
+            {{ forecast.disclaimer }}
+          </p>
+        </section>
+      </div>
+    </div>
+  </main>
+</template>
+
+<script setup lang="ts">
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+
+import {
+  ACTIONABILITY_LABELS,
+  AGENT_LABELS,
+  DIRECTION_LABELS,
+  DIRECTION_STYLES,
+  COMMITTEE_BIAS_LABELS,
+  HISTORY_RESULT_LABELS,
+  EMPTY_FORECAST_MESSAGE,
+  ERROR_FORECAST_MESSAGE,
+  ERROR_MARKET_BARS_MESSAGE,
+  LOADING_FORECAST_MESSAGE,
+  SUMMARY_SECTIONS,
+  SCHEDULER_STAGE_LABELS,
+  SCHEDULER_STATUS_LABELS,
+  WINDOW_DIRECTION_LABELS,
+  formatRuntimeSourceLabel,
+} from "@/constants/forecast";
+import MarketCandlestickChart from "@/components/MarketCandlestickChart.vue";
+import DashboardSectionHeader from "@/components/dashboard/DashboardSectionHeader.vue";
+import DashboardStateBanner from "@/components/dashboard/DashboardStateBanner.vue";
+import {
+  fetchForecastHistory,
+  fetchLatestForecast,
+  fetchLatestSchedulerStatus,
+  fetchRecentMarketBars,
+} from "@/services/forecastApi";
+import type {
+  AgentVote,
+  CommitteeDecision,
+  DailyBar,
+  DebateCase,
+  DebateRebuttal,
+  FinalForecast,
+  FinalDebatePosition,
+  ForecastDirection,
+  ForecastHistoryItem,
+  SchedulerRunStatus,
+  EvidencePackage,
+} from "@/types/forecast";
+
+const forecast = ref<FinalForecast | null>(null);
+const schedulerStatus = ref<SchedulerRunStatus | null>(null);
+const isLoading = ref(true);
+const isStatusLoading = ref(true);
+const errorMessage = ref("");
+const statusErrorMessage = ref("");
+const historyItems = ref<ForecastHistoryItem[]>([]);
+const isHistoryLoading = ref(true);
+const historyErrorMessage = ref("");
+const marketBars = ref<DailyBar[]>([]);
+const isMarketBarsLoading = ref(true);
+const marketBarsErrorMessage = ref("");
+const marketSessionClock = ref(new Date());
+let marketSessionTimer: ReturnType<typeof window.setInterval> | null = null;
+let liveRefreshTimer: ReturnType<typeof window.setInterval> | null = null;
+
+const stateLabel = computed(() => {
+  if (isLoading.value) {
+    return "正在加载";
+  }
+  if (errorMessage.value) {
+    return "加载失败";
+  }
+  if (!forecast.value) {
+    return "暂无结果";
+  }
+  return "已同步";
+});
+
+const statusPillClass = computed(() =>
+  isLoading.value
+    ? "status-pill--loading"
+    : errorMessage.value
+      ? "status-pill--danger"
+      : forecast.value
+        ? "status-pill--success"
+        : "status-pill--neutral",
+);
+
+const directionLabel = computed(() =>
+  forecast.value ? DIRECTION_LABELS[forecast.value.direction] : "未加载",
+);
+
+const directionClass = computed(() =>
+  forecast.value ? DIRECTION_STYLES[forecast.value.direction] : "status-pill--neutral",
+);
+
+const schedulerStatusLabel = computed(() => {
+  if (isStatusLoading.value) {
+    return "正在加载调度状态";
+  }
+  if (statusErrorMessage.value) {
+    return "调度状态不可用";
+  }
+  if (!schedulerStatus.value) {
+    return "等待调度状态";
+  }
+  return SCHEDULER_STATUS_LABELS[schedulerStatus.value.status] ?? schedulerStatus.value.status;
+});
+
+const schedulerStatusClass = computed(() => {
+  if (isStatusLoading.value) {
+    return "status-pill--loading";
+  }
+  if (statusErrorMessage.value) {
+    return "status-pill--danger";
+  }
+  if (!schedulerStatus.value) {
+    return "status-pill--neutral";
+  }
+
+  switch (schedulerStatus.value.status) {
+    case "running":
+      return "status-pill--loading";
+    case "success":
+      return "status-pill--success";
+    case "failed":
+      return "status-pill--danger";
+    default:
+      return "status-pill--neutral";
+  }
+});
+
+const schedulerStageLabel = computed(() => {
+  if (!schedulerStatus.value) {
+    return "—";
+  }
+  return SCHEDULER_STAGE_LABELS[schedulerStatus.value.current_stage] ?? schedulerStatus.value.current_stage;
+});
+
+const latestExecutionTime = computed(() => {
+  const status = schedulerStatus.value;
+  if (!status) {
+    return "—";
+  }
+
+  const value = status.completed_at ?? status.started_at;
+  return formatDateTime(value);
+});
+
+const schedulerAgentChips = computed(() => {
+  const status = schedulerStatus.value;
+  if (!status || status.agent_statuses.length === 0) {
+    return [];
+  }
+
+  return status.agent_statuses.map((agentStatus) => ({
+    label: agentLabel(agentStatus.agent),
+    value: schedulerAgentStatusLabel(agentStatus.status),
+    className: schedulerAgentStatusClass(agentStatus.status),
+    dotClass: schedulerAgentDotClass(agentStatus.status),
+  }));
+});
+
+const windowDirectionCards = computed(() => {
+  if (!forecast.value) {
+    return [];
+  }
+
+  return forecast.value.window_directions.map((window) => ({
+    label: WINDOW_DIRECTION_LABELS[window.window_label] ?? window.window_label,
+    directionLabel: DIRECTION_LABELS[window.direction],
+    directionClass: DIRECTION_STYLES[window.direction],
+    strength: window.strength === "strong" ? "强烈" : window.strength === "moderate" ? "中等" : "轻度",
+    confidence: formatPercent(window.confidence),
+    ...buildInsightDisplay(window.reason),
+  }));
+});
+
+const marketSessionLabel = computed(() => getMarketSessionLabel(marketSessionClock.value));
+
+const marketSessionClass = computed(() => {
+  const label = marketSessionLabel.value;
+  if (label === "周末 / 非交易时段") {
+    return "status-pill--market-closed";
+  }
+  if (label === "美国市") {
+    return "status-pill--market-us";
+  }
+  if (label === "伦敦市") {
+    return "status-pill--market-london";
+  }
+  if (label === "欧洲市") {
+    return "status-pill--market-eu";
+  }
+  if (label === "日本市") {
+    return "status-pill--market-jp";
+  }
+  return "status-pill--market-closed";
+});
+
+const marketSessionPageClass = computed(() => {
+  const label = marketSessionLabel.value;
+  if (label === "周末 / 非交易时段") {
+    return "market-session--closed";
+  }
+  if (label === "美国市") {
+    return "market-session--us";
+  }
+  if (label === "伦敦市") {
+    return "market-session--london";
+  }
+  if (label === "欧洲市") {
+    return "market-session--eu";
+  }
+  return "market-session--jp";
+});
+
+const confidenceValue = computed(() => {
+  if (!forecast.value) {
+    return 0;
+  }
+
+  return Math.round(clamp(forecast.value.confidence_score, 0, 1) * 100);
+});
+
+const confidenceBarStyle = computed(() => ({
+  width: `${confidenceValue.value}%`,
+}));
+
+const heroChips = computed(() => {
+  if (!forecast.value) {
+    return [];
+  }
+
+  return [
+    { label: "当前价", value: formatPrice(forecast.value.current_price) },
+    { label: "方向", value: directionLabel.value },
+    { label: "置信度", value: formatPercent(forecast.value.confidence_score) },
+    { label: "风险回报", value: riskRewardRatio.value },
+    { label: "可执行性", value: committeeActionabilityLabel.value },
+  ];
+});
+
+const heroMetaCards = computed(() => {
+  if (!forecast.value && !schedulerStatus.value) {
+    return [];
+  }
+
+  const cards = [
+    schedulerStatus.value
+      ? {
+          label: "当前阶段",
+          value: schedulerStageLabel.value,
+        }
+      : null,
+    forecast.value ? { label: "数据时间", value: formatDateTime(forecast.value.data_timestamp) } : null,
+    schedulerStatus.value
+      ? {
+          label: "最新执行",
+          value: latestExecutionTime.value,
+        }
+      : null,
+    forecast.value ? { label: "数据来源", value: formatRuntimeSourceLabel(forecast.value.data_source) } : null,
+  ];
+
+  return cards.filter((card): card is { label: string; value: string } => card !== null);
+});
+
+const supportCards = computed(() => {
+  if (!forecast.value) {
+    return [];
+  }
+
+  return [
+    schedulerStatus.value
+      ? {
+          label: "当前阶段",
+          value: schedulerStageLabel.value,
+        }
+      : null,
+    { label: "参考时间", value: formatDateTime(forecast.value.reference_time) },
+    { label: "运行编号", value: forecast.value.run_id ?? "暂无" },
+    { label: "预测编号", value: forecast.value.id ?? "暂无" },
+    forecast.value ? { label: "数据来源", value: formatRuntimeSourceLabel(forecast.value.data_source) } : null,
+  ].filter((card): card is { label: string; value: string } => card !== null);
+});
+
+const tradeLevelCards = computed(() => {
+  if (!forecast.value) {
+    return [];
+  }
+
+  const hasEntryRange =
+    forecast.value.entry_price_low != null &&
+    forecast.value.entry_price_high != null &&
+    forecast.value.entry_price_low !== forecast.value.entry_price_high;
+
+  return [
+    {
+      label: hasEntryRange ? "入场区间" : "入场价",
+      value: hasEntryRange
+        ? formatPriceRange(forecast.value.entry_price_low, forecast.value.entry_price_high)
+        : formatOptionalPrice(forecast.value.entry_price),
+    },
+    { label: "止盈价", value: formatOptionalPrice(forecast.value.take_profit_price) },
+    { label: "止损价", value: formatOptionalPrice(forecast.value.stop_loss_price) },
+  ];
+});
+
+const committeeDecision = computed<CommitteeDecision | null>(() => forecast.value?.committee_decision ?? null);
+
+const committeeEvidencePackage = computed<EvidencePackage | null>(() => {
+  if (forecast.value?.evidence_package) {
+    return forecast.value.evidence_package;
+  }
+  return committeeDecision.value?.evidence_package ?? null;
+});
+
+const committeeBiasLabel = computed(() => {
+  if (!forecast.value) {
+    return "未决";
+  }
+  return COMMITTEE_BIAS_LABELS[forecast.value.final_bias ?? committeeDecision.value?.final_bias ?? "cautious"] ?? "未决";
+});
+
+const committeeActionabilityLabel = computed(() => {
+  if (!forecast.value) {
+    return "未决";
+  }
+  return ACTIONABILITY_LABELS[forecast.value.actionability ?? committeeDecision.value?.actionability ?? "observe_only"] ?? "未决";
+});
+
+const committeeActionabilityToneClass = computed(() => {
+  const value = forecast.value?.actionability ?? committeeDecision.value?.actionability;
+  if (value === "trade_candidate") {
+    return "status-pill--success";
+  }
+  if (value === "no_trade") {
+    return "status-pill--danger";
+  }
+  return "status-pill--neutral";
+});
+
+const committeeValidationLabel = computed(() => {
+  const validationStatus = forecast.value?.validation_status;
+  if (!validationStatus) {
+    return "未校验";
+  }
+  return validationStatus.is_valid ? "校验通过" : "校验失败";
+});
+
+const committeeValidationToneClass = computed(() => {
+  const validationStatus = forecast.value?.validation_status;
+  if (!validationStatus) {
+    return "status-pill--neutral";
+  }
+  return validationStatus.is_valid ? "status-pill--success" : "status-pill--danger";
+});
+
+const committeeValidationSummary = computed(() => forecast.value?.validation_status?.summary ?? "尚无校验摘要。");
+const committeeWinningSideLabel = computed(() => {
+  const side = committeeDecision.value?.winning_side;
+  if (side === "bull") {
+    return "多头";
+  }
+  if (side === "bear") {
+    return "空头";
+  }
+  if (side === "none") {
+    return "无明确胜者";
+  }
+  return "未决";
+});
+
+const committeeDebateCards = computed(() => {
+  const evidencePackage = committeeEvidencePackage.value;
+  if (!evidencePackage) {
+    return [];
+  }
+
+  return evidencePackage.items.map((item) => ({
+    id: item.item_id,
+    title: item.specialist_name,
+    signal: item.signal,
+    confidence: formatPercent(item.confidence),
+    toolStatus: item.tool_status,
+    toolStatusLabel:
+      item.tool_status === "ok" ? "正常" : item.tool_status === "degraded" ? "降级" : "不可用",
+    keyEvidence: item.key_evidence,
+    riskFactors: item.risk_factors,
+    invalidationConditions: item.invalidation_conditions,
+    importantLevels: item.important_levels,
+    dataFreshness: item.data_freshness ?? "—",
+    degradedReason: item.degraded_reason,
+    evidenceRefs: item.evidence_refs,
+  }));
+});
+
+const committeeOpeningCases = computed(() => {
+  const decision = committeeDecision.value;
+  const cases = [
+    forecast.value?.bull_opening_case ?? decision?.bull_opening_case,
+    forecast.value?.bear_opening_case ?? decision?.bear_opening_case,
+  ].filter(Boolean) as DebateCase[];
+  if (cases.length === 0) {
+    return [
+      {
+        side: "bull",
+        sideLabel: "多头开场",
+        stanceClass: "status-pill--success",
+        thesis: "当前快照未包含多头开场内容。",
+        entry_zone: "等待当前研究快照完成后显示",
+        stop_loss_or_invalidation: "等待当前研究快照完成后显示",
+        target_zone: "等待当前研究快照完成后显示",
+        risk_reward: null,
+        weakness_acknowledged: ["当前尚无可展示的 Opening Case 数据。"],
+        supporting_arguments: ["等待新的委员会研究结果写入后自动显示。"],
+        confidence: null,
+        notes: ["当前快照只包含部分委员会元数据。"],
+      },
+      {
+        side: "bear",
+        sideLabel: "空头开场",
+        stanceClass: "status-pill--danger",
+        thesis: "当前快照未包含空头开场内容。",
+        entry_zone: "等待当前研究快照完成后显示",
+        stop_loss_or_invalidation: "等待当前研究快照完成后显示",
+        target_zone: "等待当前研究快照完成后显示",
+        risk_reward: null,
+        weakness_acknowledged: ["当前尚无可展示的 Opening Case 数据。"],
+        supporting_arguments: ["等待新的委员会研究结果写入后自动显示。"],
+        confidence: null,
+        notes: ["当前快照只包含部分委员会元数据。"],
+      },
+    ];
+  }
+  return cases.map((item) => ({
+    ...item,
+    sideLabel: item.side === "bull" ? "多头开场" : "空头开场",
+    stanceClass: item.side === "bull" ? "status-pill--success" : "status-pill--danger",
+  }));
+});
+
+const committeeRebuttals = computed(() => {
+  const decision = committeeDecision.value;
+  const rebuttals = [forecast.value?.bull_rebuttal ?? decision?.bull_rebuttal, forecast.value?.bear_rebuttal ?? decision?.bear_rebuttal].filter(Boolean) as DebateRebuttal[];
+  if (rebuttals.length === 0) {
+    return [
+      {
+        side: "bull",
+        responds_to_side: "bear",
+        sideLabel: "多头反驳",
+        respondLabel: "回应空头",
+        stanceClass: "status-pill--success",
+        rebutted_points: ["当前快照未包含多头 rebuttal 内容。"],
+        accepted_points: ["等待当前研究快照完成后显示。"],
+        plan_adjustments: ["等待当前研究快照完成后显示。"],
+        confidence_trend: "flat",
+        confidence_change: null,
+        evidence_item_refs: [],
+        notes: ["当前快照只包含部分委员会元数据。"],
+      },
+      {
+        side: "bear",
+        responds_to_side: "bull",
+        sideLabel: "空头反驳",
+        respondLabel: "回应多头",
+        stanceClass: "status-pill--danger",
+        rebutted_points: ["当前快照未包含空头 rebuttal 内容。"],
+        accepted_points: ["等待当前研究快照完成后显示。"],
+        plan_adjustments: ["等待当前研究快照完成后显示。"],
+        confidence_trend: "flat",
+        confidence_change: null,
+        evidence_item_refs: [],
+        notes: ["当前快照只包含部分委员会元数据。"],
+      },
+    ];
+  }
+  return rebuttals.map((item) => ({
+    ...item,
+    sideLabel: item.side === "bull" ? "多头反驳" : "空头反驳",
+    respondLabel: item.responds_to_side === "bull" ? "回应多头" : "回应空头",
+    stanceClass: item.side === "bull" ? "status-pill--success" : "status-pill--danger",
+  }));
+});
+
+const committeeFinalPositions = computed(() => {
+  const decision = committeeDecision.value;
+  const positions = [
+    forecast.value?.bull_final_position ?? decision?.bull_final_position,
+    forecast.value?.bear_final_position ?? decision?.bear_final_position,
+  ].filter(Boolean) as FinalDebatePosition[];
+  if (positions.length === 0) {
+    return [
+      {
+        side: "bull",
+        sideLabel: "多头终局",
+        stance: "soften",
+        stanceClass: "status-pill--neutral",
+        confidence: 0,
+        confidence_change: null,
+        adopted_arguments: ["当前快照未包含多头终局内容。"],
+        rejected_arguments: ["等待当前研究快照完成后显示。"],
+        plan_adjustments: ["等待当前研究快照完成后显示。"],
+        abandon_conditions: ["等待当前研究快照完成后显示。"],
+        evidence_item_refs: [],
+        notes: ["当前快照只包含部分委员会元数据。"],
+      },
+      {
+        side: "bear",
+        sideLabel: "空头终局",
+        stance: "soften",
+        stanceClass: "status-pill--neutral",
+        confidence: 0,
+        confidence_change: null,
+        adopted_arguments: ["当前快照未包含空头终局内容。"],
+        rejected_arguments: ["等待当前研究快照完成后显示。"],
+        plan_adjustments: ["等待当前研究快照完成后显示。"],
+        abandon_conditions: ["等待当前研究快照完成后显示。"],
+        evidence_item_refs: [],
+        notes: ["当前快照只包含部分委员会元数据。"],
+      },
+    ];
+  }
+  return positions.map((item) => ({
+    ...item,
+    sideLabel: item.side === "bull" ? "多头终局" : "空头终局",
+    stanceClass:
+      item.stance === "maintain"
+        ? "status-pill--success"
+        : item.stance === "soften"
+          ? "status-pill--neutral"
+          : "status-pill--danger",
+  }));
+});
+
+const committeeTradePlan = computed(() => {
+  const decision = committeeDecision.value;
+  if (!decision) {
+    return null;
+  }
+
+  if (decision.final_bias === "bullish" && decision.long_plan) {
+    return {
+      title: "做多计划",
+      biasLabel: committeeBiasLabel.value,
+      tradePlan: decision.long_plan,
+      entryLabel: "入场区间",
+      stopLabel: "止损 / 失效",
+      targetLabel: "目标区间",
+    };
+  }
+
+  if (decision.final_bias === "bearish" && decision.short_plan) {
+    return {
+      title: "做空计划",
+      biasLabel: committeeBiasLabel.value,
+      tradePlan: decision.short_plan,
+      entryLabel: "入场区间",
+      stopLabel: "止损 / 失效",
+      targetLabel: "目标区间",
+    };
+  }
+
+  if (decision.final_bias === "range_bound" && decision.range_plan) {
+    return {
+      title: "区间计划",
+      biasLabel: committeeBiasLabel.value,
+      tradePlan: decision.range_plan,
+      entryLabel: "区间卖出",
+      stopLabel: "区间止损",
+      targetLabel: "中线目标",
+    };
+  }
+
+  return {
+    title: "谨慎观望",
+    biasLabel: committeeBiasLabel.value,
+    tradePlan: null,
+    entryLabel: "等待条件",
+    stopLabel: "风险失效",
+    targetLabel: "执行前提",
+  };
+});
+
+const committeeTradePlanRows = computed(() => {
+  const plan = committeeTradePlan.value;
+  if (!plan || !plan.tradePlan) {
+    return [];
+  }
+
+  if (plan.tradePlan && "upper_sell_zone" in plan.tradePlan) {
+    return [
+      { label: "高点卖出区", value: plan.tradePlan.upper_sell_zone },
+      { label: "低点买入区", value: plan.tradePlan.lower_buy_zone },
+      { label: "上方止损", value: plan.tradePlan.upper_stop },
+      { label: "下方止损", value: plan.tradePlan.lower_stop },
+      { label: "中线目标", value: plan.tradePlan.midline_target },
+      { label: "突破确认", value: plan.tradePlan.breakout_confirmation_level },
+      { label: "跌破确认", value: plan.tradePlan.breakdown_confirmation_level },
+      { label: "区间失效", value: plan.tradePlan.range_invalidated_if },
+    ];
+  }
+
+  return [
+    { label: plan.entryLabel, value: plan.tradePlan.entry_zone },
+    { label: plan.stopLabel, value: plan.tradePlan.stop_loss ?? plan.tradePlan.invalidation_level ?? "—" },
+    { label: plan.targetLabel, value: plan.tradePlan.target_zone },
+    { label: "风险回报比", value: plan.tradePlan.risk_reward != null ? `${plan.tradePlan.risk_reward.toFixed(2)} R` : "—" },
+    {
+      label: "入场条件",
+      value: plan.tradePlan.conditions_to_enter.length > 0 ? plan.tradePlan.conditions_to_enter.join("；") : "—",
+    },
+    {
+      label: "退出条件",
+      value: plan.tradePlan.conditions_to_abort.length > 0 ? plan.tradePlan.conditions_to_abort.join("；") : "—",
+    },
+  ];
+});
+
+const committeeValidationErrors = computed(() => forecast.value?.validation_status?.errors ?? []);
+const committeeValidationWarnings = computed(() => forecast.value?.validation_status?.warnings ?? []);
+const committeeAdoptedArguments = computed(() => committeeDecision.value?.adopted_arguments ?? []);
+const committeeRejectedArguments = computed(() => committeeDecision.value?.rejected_arguments ?? []);
+const committeeWaitConditions = computed(() => committeeDecision.value?.wait_conditions ?? []);
+
+const entryLevelLabel = computed(() => {
+  if (
+    forecast.value?.entry_price_low != null &&
+    forecast.value?.entry_price_high != null &&
+    forecast.value.entry_price_low !== forecast.value.entry_price_high
+  ) {
+    return "入场区间";
+  }
+  return "入场价";
+});
+
+const entryLevelValue = computed(() => {
+  if (
+    forecast.value?.entry_price_low != null &&
+    forecast.value?.entry_price_high != null &&
+    forecast.value.entry_price_low !== forecast.value.entry_price_high
+  ) {
+    return formatPriceRange(forecast.value.entry_price_low, forecast.value.entry_price_high);
+  }
+  return formatOptionalPrice(forecast.value?.entry_price);
+});
+
+const summaryCards = computed(() => {
+  if (!forecast.value) {
+    return [];
+  }
+
+  return SUMMARY_SECTIONS.map((section) => {
+    const content = forecast.value?.[section.key] ?? null;
+    const renderedContent = content && String(content).trim() ? String(content) : "当前维度暂无摘要。";
+      const rawLines = splitSummaryLines(renderedContent);
+    const newsMarkerIndex = section.key === "news_summary" ? rawLines.findIndex((line) => line.includes("代表性标题")) : -1;
+    const lines = rawLines.map((line) => parseInsightLine(line));
+    const newsHighlights = section.key === "news_summary" ? parseNewsHighlights(renderedContent) : [];
+    const evidenceLines = section.key === "news_summary" ? [] : splitEvidenceLines(renderedContent).slice(1);
+    const hasImportantLine = lines.some((line) => line.important);
+    const marketSentimentReferenceItems =
+      section.key === "market_sentiment_summary"
+        ? parseMarketSentimentReferences(renderedContent)
+        : [];
+      return {
+        key: section.key,
+        title: section.title,
+        content: renderedContent,
+      leadLine:
+        section.key === "market_sentiment_summary"
+          ? {
+              tag: "主判断",
+              text:
+                splitSummaryLines(renderedContent)
+                  .map((line) => line.replace(/^\-\s*/, "").trim())
+                  .find((line) => line.length > 0 && !/^(?:代表性市场|参考依据|主判断)[:：]\s*$/u.test(line)) ?? "当前维度暂无摘要。",
+              important: false,
+            }
+          : lines[0] ?? parseInsightLine("当前维度暂无摘要。"),
+      detailLines: section.key === "news_summary" && newsMarkerIndex > 0 ? lines.slice(1, newsMarkerIndex) : lines.slice(1),
+      highlightLead: (lines[0] ?? parseInsightLine("当前维度暂无摘要。")).important,
+      hasImportantLine,
+      evidenceItems: evidenceLines.map((text, index) => ({
+        index: index + 1,
+        text,
+      })),
+      referenceItems: marketSentimentReferenceItems,
+      newsHighlights,
+      stanceLabel: summaryStanceLabel(section.key, renderedContent),
+      stanceTagLabel: summaryStanceTagLabel(section.key, renderedContent),
+      stanceClass: summaryStanceClass(section.key, renderedContent),
+      accentClass: summaryAccentClass(section.key),
+      featured: section.key === "technical_summary" || section.key === "risk_summary",
+    };
+  });
+});
+
+const orderedSummaryCards = computed(() => {
+  const priority = [
+    "technical_summary",
+    "risk_summary",
+    "macro_summary",
+    "news_summary",
+    "market_sentiment_summary",
+    "alt_data_summary",
+  ] as const;
+
+  const cards = new Map(summaryCards.value.map((card) => [card.key, card]));
+  return priority.map((key) => cards.get(key)).filter(Boolean) as typeof summaryCards.value;
+});
+
+const historyDailySeries = computed(() => {
+  const sortedItems = [...historyItems.value].sort((left, right) => {
+    const rightTime = new Date(right.forecast.reference_time).getTime();
+    const leftTime = new Date(left.forecast.reference_time).getTime();
+    return rightTime - leftTime;
+  });
+
+  const latestByTradingDay = new Map<string, ForecastHistoryItem>();
+  for (const item of sortedItems) {
+    const tradingDayKey = item.trading_day ?? formatTradingDayKey(item.forecast.reference_time);
+    if (!latestByTradingDay.has(tradingDayKey)) {
+      latestByTradingDay.set(tradingDayKey, item);
+    }
+  }
+
+  return [...latestByTradingDay.values()].sort((left, right) => {
+    const leftKey = left.trading_day ?? formatTradingDayKey(left.forecast.reference_time);
+    const rightKey = right.trading_day ?? formatTradingDayKey(right.forecast.reference_time);
+    return rightKey.localeCompare(leftKey);
+  });
+});
+
+const historyItemsDescending = computed(() => [...historyDailySeries.value]);
+
+const historyEvaluations = computed(() => historyDailySeries.value.filter((item) => item.evaluation));
+
+const historyStats = computed(() => {
+  const evaluations = historyEvaluations.value;
+  const totalCount = historyDailySeries.value.length;
+  const evaluatedCount = evaluations.length;
+  const totalPnl = evaluations.reduce((sum, item) => sum + getHistoryDisplayPnlPoints(item), 0);
+  const winCount = evaluations.filter((item) => item.evaluation?.result === "win").length;
+  const averagePnl = evaluatedCount > 0 ? totalPnl / evaluatedCount : 0;
+  const winRate = evaluatedCount > 0 ? winCount / evaluatedCount : 0;
+
+  return {
+    totalCount,
+    evaluatedCount,
+    totalPnl,
+    averagePnl,
+    winRate,
+  };
+});
+
+const historyChart = computed(() => {
+  const evaluations = historyEvaluations.value;
+  const chartWidth = 840;
+  const chartHeight = 240;
+  const barGap = 14;
+  const barCount = evaluations.length;
+  if (barCount === 0) {
+    return {
+      width: chartWidth,
+      height: chartHeight,
+      baselineY: chartHeight / 2,
+      bars: [] as Array<{
+        x: number;
+        y: number;
+        height: number;
+        width: number;
+        fill: string;
+        label: string;
+        value: string;
+        resultLabel: string;
+        dateLabel: string;
+      }>,
+    };
+  }
+
+  const innerWidth = chartWidth - 64;
+  const barWidth = Math.max(18, (innerWidth - barGap * (barCount - 1)) / barCount);
+  const maxAbs = Math.max(...evaluations.map((item) => Math.abs(getHistoryDisplayPnlPoints(item))), 1);
+  const baselineY = chartHeight / 2;
+  const maxBarHeight = chartHeight * 0.34;
+
+  return {
+    width: chartWidth,
+    height: chartHeight,
+    baselineY,
+    bars: evaluations.map((item, index) => {
+      const pnl = getHistoryDisplayPnlPoints(item);
+      const barHeight = Math.max(2, (Math.abs(pnl) / maxAbs) * maxBarHeight);
+      const x = 32 + index * (barWidth + barGap);
+      const y = pnl >= 0 ? baselineY - barHeight : baselineY;
+      return {
+        x,
+        y,
+        height: barHeight,
+        width: barWidth,
+        fill: pnl >= 0 ? "url(#history-positive-gradient)" : "url(#history-negative-gradient)",
+        label: item.forecast.symbol,
+        value: formatSignedPnl(pnl),
+        resultLabel: HISTORY_RESULT_LABELS[item.evaluation?.result ?? "flat"] ?? item.evaluation?.result ?? "未知",
+        dateLabel: formatDateShort(item.trading_day ?? item.forecast.reference_time),
+      };
+    }),
+  };
+});
+
+const riskRewardRatio = computed(() => {
+  if (!forecast.value) {
+    return "暂无";
+  }
+
+  const { entry_price, take_profit_price, stop_loss_price } = forecast.value;
+  if (entry_price == null || take_profit_price == null || stop_loss_price == null) {
+    return "暂无";
+  }
+
+  const reward = Math.abs(take_profit_price - entry_price);
+  const risk = Math.abs(entry_price - stop_loss_price);
+  if (risk === 0) {
+    return "暂无";
+  }
+
+  return `${(reward / risk).toFixed(2)} R`;
+});
+
+const riskNoteItems = computed(() => {
+  if (!forecast.value) {
+    return [];
+  }
+
+  const generatedAtLabel = formatDateTime(forecast.value.reference_time);
+
+  return forecast.value.risk_notes
+    .filter((note) => !isDiagnosticRiskNote(note))
+    .map((note) => ({
+    text: note,
+    tag: riskNoteTag(note),
+    toneClass: riskNoteToneClass(note),
+    generatedAtLabel,
+    }));
+});
+
+async function loadForecast(options: { background?: boolean } = {}): Promise<void> {
+  const background = options.background ?? false;
+
+  if (!background) {
+    isLoading.value = true;
+    errorMessage.value = "";
+  }
+
+  try {
+    forecast.value = await fetchLatestForecast();
+    errorMessage.value = "";
+  } catch (error) {
+    if (!background || forecast.value === null) {
+      forecast.value = null;
+      errorMessage.value = error instanceof Error ? error.message : ERROR_FORECAST_MESSAGE;
+    }
+  } finally {
+    if (!background) {
+      isLoading.value = false;
+    }
+  }
+}
+
+async function loadSchedulerStatus(options: { background?: boolean } = {}): Promise<void> {
+  const background = options.background ?? false;
+
+  if (!background) {
+    isStatusLoading.value = true;
+    statusErrorMessage.value = "";
+  }
+
+  try {
+    schedulerStatus.value = await fetchLatestSchedulerStatus();
+    statusErrorMessage.value = "";
+  } catch (error) {
+    if (!background || schedulerStatus.value === null) {
+      schedulerStatus.value = null;
+      statusErrorMessage.value = error instanceof Error ? error.message : "未知错误，无法加载最新调度状态。";
+    }
+  } finally {
+    if (!background) {
+      isStatusLoading.value = false;
+    }
+  }
+}
+
+async function loadHistory(): Promise<void> {
+  isHistoryLoading.value = true;
+  historyErrorMessage.value = "";
+
+  try {
+    historyItems.value = await fetchForecastHistory(30);
+  } catch (error) {
+    historyItems.value = [];
+    historyErrorMessage.value = error instanceof Error ? error.message : "未知错误，无法加载历史表现。";
+  } finally {
+    isHistoryLoading.value = false;
+  }
+}
+
+async function loadMarketBars(): Promise<void> {
+  isMarketBarsLoading.value = true;
+  marketBarsErrorMessage.value = "";
+
+  try {
+    marketBars.value = await fetchRecentMarketBars("XAUUSD", 60);
+  } catch (error) {
+    marketBars.value = [];
+    marketBarsErrorMessage.value = error instanceof Error ? error.message : ERROR_MARKET_BARS_MESSAGE;
+  } finally {
+    isMarketBarsLoading.value = false;
+  }
+}
+
+async function refreshLiveData(options: { background?: boolean } = {}): Promise<void> {
+  await Promise.all([loadForecast(options), loadSchedulerStatus(options)]);
+}
+
+async function loadStaticData(): Promise<void> {
+  await Promise.all([loadHistory(), loadMarketBars()]);
+}
+
+function getHistoryDisplayPnlPoints(item: ForecastHistoryItem): number {
+  const evaluation = item.evaluation;
+  if (!evaluation) {
+    return 0;
+  }
+  return evaluation.pnl_points;
+}
+
+function formatPrice(value: number): string {
+  return new Intl.NumberFormat("zh-CN", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+function formatOptionalPrice(value: number | null | undefined): string {
+  if (value == null) {
+    return "暂无";
+  }
+  return formatPrice(value);
+}
+
+function formatPriceRange(
+  low: number | null | undefined,
+  high: number | null | undefined,
+): string {
+  if (low == null || high == null) {
+    return "暂无";
+  }
+  return `${formatPrice(low)} - ${formatPrice(high)}`;
+}
+
+function formatPercent(value: number): string {
+  return `${(clamp(value, 0, 1) * 100).toFixed(0)}%`;
+}
+
+function formatDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
+function formatTradingDayKey(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toISOString().slice(0, 10);
+}
+
+function formatDateShort(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+function formatSignedPnl(value: number): string {
+  const rounded = value.toFixed(2);
+  return value > 0 ? `+${rounded}` : rounded;
+}
+
+function formatPnlPoints(value: number): string {
+  return formatSignedPnl(value);
+}
+
+function agentLabel(agent: AgentVote["agent"]): string {
+  return AGENT_LABELS[agent] ?? agent;
+}
+
+function voteDirectionClass(direction: ForecastDirection): string {
+  return DIRECTION_STYLES[direction];
+}
+
+function schedulerAgentStatusLabel(status: string): string {
+  const labelMap: Record<string, string> = {
+    pending: "待执行",
+    running: "执行中",
+    success: "已完成",
+    failed: "已失败",
+  };
+
+  return labelMap[status] ?? status;
+}
+
+function schedulerAgentStatusClass(status: string): string {
+  switch (status) {
+    case "pending":
+      return "status-pill--neutral";
+    case "running":
+      return "status-pill--loading";
+    case "success":
+      return "status-pill--success";
+    case "failed":
+      return "status-pill--danger";
+    default:
+      return "status-pill--neutral";
+  }
+}
+
+function schedulerAgentDotClass(status: string): string {
+  switch (status) {
+    case "pending":
+      return "agent-state-chip__dot--neutral";
+    case "running":
+      return "agent-state-chip__dot--warning";
+    case "success":
+      return "agent-state-chip__dot--success";
+    case "failed":
+      return "agent-state-chip__dot--danger";
+    default:
+      return "agent-state-chip__dot--warning";
+  }
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function splitSummaryLines(value: string): string[] {
+  const normalized = value.replace(/\r\n/g, "\n").trim();
+  if (!normalized) {
+    return [];
+  }
+
+  const lines = normalized
+    .split("\n")
+    .map((line) => line.replace(/^\-\s*/, "").trim())
+    .filter((line) => line.length > 0);
+
+  return lines.length > 0 ? lines : [normalized];
+}
+
+function parseInsightLine(value: string, fallbackTag = "主判断"): {
+  tag: string;
+  text: string;
+  important: boolean;
+} {
+  const normalized = value.trim();
+  if (!normalized) {
+    return {
+      tag: fallbackTag,
+      text: "",
+      important: false,
+    };
+  }
+
+  const match = normalized.match(/^(?:【(?<bracketTag>[^】]{1,12})】|(?<plainTag>[^：:]{1,12})[:：])\s*(?<text>.+)$/u);
+  const extractedTag = (match?.groups?.bracketTag ?? match?.groups?.plainTag ?? "").trim();
+  const text = (match?.groups?.text ?? normalized).trim();
+  const tag = extractedTag || fallbackTag;
+  const important = /^(?:重点|关键|核心|最重要|重要|必须关注|风险|结论|主判断|趋势)/u.test(tag) || /^(?:重点|关键|核心|最重要|重要|必须关注|风险|结论|主判断|趋势)/u.test(text);
+  return {
+    tag,
+    text,
+    important,
+  };
+}
+
+function parseNewsHighlights(value: string): Array<{ index: number; source: string; text: string }> {
+  const lines = splitSummaryLines(value);
+  const markerIndex = lines.findIndex((line) => line.includes("代表性标题"));
+  if (markerIndex < 0) {
+    return [];
+  }
+
+  return lines
+    .slice(markerIndex + 1)
+    .map((line) => line.replace(/^\-\s*/, "").trim())
+    .filter((line) => line.length > 0)
+    .map((line, index) => {
+      const match = line.match(/^(?<source>[^:：]{1,32})[:：]\s*(?<text>.+)$/u);
+      return {
+        index: index + 1,
+        source: match?.groups?.source?.trim() || "新闻",
+        text: (match?.groups?.text ?? line).trim(),
+      };
+    });
+}
+
+function parseMarketSentimentReferences(value: string): Array<{ index: number; text: string }> {
+  const lines = splitSummaryLines(value).map((line) => line.replace(/^\-\s*/, "").trim()).filter(Boolean);
+  const markerIndex = lines.findIndex((line) => /^参考依据[:：]$/u.test(line));
+  if (markerIndex < 0) {
+    return lines.slice(1).map((text, index) => ({
+      index: index + 1,
+      text,
+    }));
+  }
+
+  return lines
+    .slice(markerIndex + 1)
+    .filter((line) => line.length > 0)
+    .map((text, index) => ({
+      index: index + 1,
+      text,
+    }));
+}
+
+function buildInsightDisplay(value: string): {
+  focusTag: string;
+  primaryReason: string;
+  primaryReasonClass: string;
+  highlightLead: boolean;
+  secondaryReasons: Array<{
+    tag: string;
+    text: string;
+    important: boolean;
+  }>;
+} {
+  const items = splitSummaryLines(value).map((line) => parseInsightLine(line, "主判断"));
+  const primary = items[0] ?? parseInsightLine("当前暂无判断。");
+  const secondaryReasons = items.slice(1);
+  const focusItem = secondaryReasons.find((item) => item.important || item.tag !== "补充判断" && item.tag !== "主判断");
+  return {
+    focusTag: focusItem ? focusItem.tag : "",
+    primaryReason: primary.text,
+    primaryReasonClass: primary.important ? "summary-lead--featured" : "",
+    highlightLead: primary.important,
+    secondaryReasons,
+  };
+}
+
+function splitEvidenceLines(value: string): string[] {
+  const normalized = value.replace(/\r\n/g, "\n").trim();
+  if (!normalized) {
+    return [];
+  }
+
+  const rawLines = normalized.includes("\n")
+    ? normalized.split("\n")
+    : normalized.split(/[。！？；;]/);
+
+  return rawLines
+    .map((line) => line.replace(/^\-\s*/, "").trim())
+    .filter((line) => line.length > 0);
+}
+
+function getMarketSessionLabel(now: Date = new Date()): string {
+  const utcDay = now.getUTCDay();
+  const minutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+  const fridayClose = 22 * 60;
+  const japanEnd = 7 * 60;
+  const europeEnd = 8 * 60;
+  const londonEnd = 13 * 60 + 30;
+  const usEnd = 21 * 60;
+
+  if (utcDay === 6) {
+    return "周末 / 非交易时段";
+  }
+  if (utcDay === 5 && minutes >= fridayClose) {
+    return "周末 / 非交易时段";
+  }
+  if (utcDay === 0 && minutes < fridayClose) {
+    return "周末 / 非交易时段";
+  }
+  if (minutes >= 13 * 60 + 30 && minutes < usEnd) {
+    return "美国市";
+  }
+  if (minutes >= 8 * 60 && minutes < londonEnd) {
+    return "伦敦市";
+  }
+  if (minutes >= japanEnd && minutes < europeEnd) {
+    return "欧洲市";
+  }
+  return "日本市";
+}
+
+function summaryAccentClass(key: string): string {
+  const accentMap: Record<string, string> = {
+    technical_summary: "summary-card--teal",
+    macro_summary: "summary-card--blue",
+    news_summary: "summary-card--amber",
+    market_sentiment_summary: "summary-card--lime",
+    alt_data_summary: "summary-card--cyan",
+    risk_summary: "summary-card--rose",
+  };
+
+  return accentMap[key] ?? "summary-card--slate";
+}
+
+function summaryStanceLabel(key: string, content: string): string {
+  const lowerContent = content.toLowerCase();
+  if (key === "risk_summary") {
+    return "中性 / 观望";
+  }
+  if (lowerContent.includes("看空") || lowerContent.includes("bearish") || content.includes("偏空") || content.includes("压力")) {
+    return "看空";
+  }
+  if (lowerContent.includes("看多") || lowerContent.includes("bullish") || content.includes("偏多") || content.includes("支撑")) {
+    return "看多";
+  }
+  if (content.includes("中性") || content.includes("震荡") || content.includes("暂不可用")) {
+    return "中性";
+  }
+  return "中性";
+}
+
+function summaryStanceClass(key: string, content: string): string {
+  const stance = summaryStanceLabel(key, content);
+  if (stance === "看多") {
+    return "summary-stance--bullish";
+  }
+  if (stance === "看空") {
+    return "summary-stance--bearish";
+  }
+  return "summary-stance--neutral";
+}
+
+function summaryStanceTagLabel(key: string, content: string): string {
+  const stance = summaryStanceLabel(key, content);
+  if (stance === "看多") {
+    return "偏多";
+  }
+  if (stance === "看空") {
+    return "偏空";
+  }
+  return key === "risk_summary" ? "防守" : "中性";
+}
+
+function riskNoteTag(note: string): string {
+  if (isDiagnosticRiskNote(note)) {
+    return "诊断";
+  }
+  if (note.includes("ATR") || note.includes("止损") || note.includes("止盈")) {
+    return "波动";
+  }
+  if (note.includes("缺失") || note.includes("不可用")) {
+    return "缺失";
+  }
+
+  return "提示";
+}
+
+function riskNoteToneClass(note: string): string {
+  if (isDiagnosticRiskNote(note)) {
+    return "risk-note-card--warning";
+  }
+  if (note.includes("ATR")) {
+    return "risk-note-card--accent";
+  }
+  return "risk-note-card--neutral";
+}
+
+function isDiagnosticRiskNote(note: string): boolean {
+  return /^OpenAI-compatible\s+.+\s+agent\s+/.test(note) || note.includes("调用失败") || note.includes("回退");
+}
+
+onMounted(() => {
+  marketSessionTimer = window.setInterval(() => {
+    marketSessionClock.value = new Date();
+  }, 60_000);
+
+  void loadStaticData();
+  void refreshLiveData();
+  liveRefreshTimer = window.setInterval(() => {
+    void refreshLiveData({ background: true });
+  }, 60_000);
+});
+
+onBeforeUnmount(() => {
+  if (marketSessionTimer !== null) {
+    window.clearInterval(marketSessionTimer);
+    marketSessionTimer = null;
+  }
+  if (liveRefreshTimer !== null) {
+    window.clearInterval(liveRefreshTimer);
+    liveRefreshTimer = null;
+  }
+});
+</script>
