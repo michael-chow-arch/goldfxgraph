@@ -10,6 +10,7 @@ from goldfxgraph.backfill.cli import main as backfill_main
 from goldfxgraph.backfill.eod_backfill import run_eod_backfill
 from goldfxgraph.cli import main as goldfxgraph_main
 from goldfxgraph.packages.common.settings import GoldFXGraphSettings
+from goldfxgraph.persistence.models import ExternalSourceModel
 from goldfxgraph.persistence.database import SessionFactory, create_session_factory, init_models
 from goldfxgraph.persistence.repositories import ForecastRepository
 from goldfxgraph.schemas.forecast import DailyBar
@@ -30,6 +31,7 @@ async def _repository() -> tuple[SessionFactory, ForecastRepository]:
     session_factory = create_session_factory("sqlite+aiosqlite:///:memory:")
     await init_models(session_factory.engine)
     repository = ForecastRepository(session_factory)
+    await _seed_tradingview_history_source(session_factory)
     await repository.upsert_market_bars(
         [
             DailyBar(
@@ -44,6 +46,36 @@ async def _repository() -> tuple[SessionFactory, ForecastRepository]:
         ]
     )
     return session_factory, repository
+
+
+async def _seed_tradingview_history_source(session_factory: SessionFactory) -> None:
+    async with session_factory.sessionmaker() as session:
+        session.add(
+            ExternalSourceModel(
+                source_key="tradingview.history",
+                source_type="market_data",
+                endpoint_url="https://www.tradingview.com/symbols/XAUUSD/?exchange=FX",
+                request_config={
+                    "http_url": "https://tvc4.tradingview.com/history",
+                    "ws_url": "wss://data.tradingview.com/socket.io/websocket",
+                    "origin": "https://www.tradingview.com",
+                    "user_agent": "Mozilla/5.0",
+                    "auth_token": "unauthorized_user_token",
+                    "chart_symbol": "FX:XAUUSD",
+                    "chart_symbol_alias": "symbol_1",
+                    "chart_timezone": "Etc/UTC",
+                    "session_prefix": "cs_",
+                    "session_path": "symbols/XAUUSD/",
+                    "symbol": "XAUUSD",
+                    "source_name": "TradingView",
+                },
+                version="1.0.0",
+                is_active=True,
+                description="测试外部源",
+                change_notes="测试数据",
+            )
+        )
+        await session.commit()
 
 
 async def test_compute_missing_completed_trading_days_respects_us_eastern_cutoff(tmp_path) -> None:
@@ -279,6 +311,8 @@ async def test_goldfxgraph_cli_dispatches_backfill_command(monkeypatch: pytest.M
         )()
 
     monkeypatch.setattr("goldfxgraph.backfill.cli.run_eod_backfill", fake_run_eod_backfill)
+    monkeypatch.setattr("goldfxgraph.backfill.cli.create_session_factory", lambda database_url: _FakeSessionFactory())
+    monkeypatch.setattr("goldfxgraph.backfill.cli.init_models", lambda engine: asyncio.sleep(0))
 
     exit_code = await asyncio.to_thread(
         goldfxgraph_main,
@@ -313,6 +347,8 @@ async def test_backfill_cli_module_can_run_directly(monkeypatch: pytest.MonkeyPa
         )()
 
     monkeypatch.setattr("goldfxgraph.backfill.cli.run_eod_backfill", fake_run_eod_backfill)
+    monkeypatch.setattr("goldfxgraph.backfill.cli.create_session_factory", lambda database_url: _FakeSessionFactory())
+    monkeypatch.setattr("goldfxgraph.backfill.cli.init_models", lambda engine: asyncio.sleep(0))
 
     exit_code = await asyncio.to_thread(
         backfill_main,
@@ -345,6 +381,8 @@ async def test_backfill_cli_returns_non_zero_when_backfill_fails(monkeypatch: py
         )()
 
     monkeypatch.setattr("goldfxgraph.backfill.cli.run_eod_backfill", fake_run_eod_backfill)
+    monkeypatch.setattr("goldfxgraph.backfill.cli.create_session_factory", lambda database_url: _FakeSessionFactory())
+    monkeypatch.setattr("goldfxgraph.backfill.cli.init_models", lambda engine: asyncio.sleep(0))
 
     exit_code = await asyncio.to_thread(
         backfill_main,
@@ -355,3 +393,13 @@ async def test_backfill_cli_returns_non_zero_when_backfill_fails(monkeypatch: py
     )
 
     assert exit_code == 1
+
+
+class _FakeEngine:
+    async def dispose(self) -> None:  # pragma: no cover - trivial helper
+        return None
+
+
+class _FakeSessionFactory:
+    def __init__(self) -> None:
+        self.engine = _FakeEngine()

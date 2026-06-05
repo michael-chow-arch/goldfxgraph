@@ -13,11 +13,13 @@ from goldfxgraph.persistence.database import create_session_factory, init_models
 from goldfxgraph.persistence.repositories import ForecastRepository
 from goldfxgraph.schemas.forecast import CurrentQuote, DailyBar, ForecastDirection
 from goldfxgraph.workflow import nodes
+from conftest import seed_runtime_registry
 
 
 async def _repository() -> tuple[ForecastRepository, object]:
     session_factory = create_session_factory("sqlite+aiosqlite:///:memory:")
     await init_models(session_factory.engine)
+    await seed_runtime_registry(session_factory)
     repository = ForecastRepository(session_factory)
     await repository.upsert_market_bars(
         [
@@ -45,7 +47,7 @@ def _settings() -> GoldFXGraphSettings:
 
 def _patch_real_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        nodes.CurrentQuoteProvider,
+        nodes.TradingViewQuoteProvider,
         "fetch",
         lambda self: CurrentQuote(
             symbol="XAUUSD",
@@ -57,7 +59,7 @@ def _patch_real_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         nodes,
         "_fetch_dollar_index",
-        lambda transport: (
+        lambda source, transport: (
             {
                 "status": "available",
                 "source": "fred",
@@ -70,7 +72,7 @@ def _patch_real_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         nodes,
         "_fetch_real_rates",
-        lambda transport: (
+        lambda source, transport: (
             {
                 "status": "available",
                 "source": "fred",
@@ -83,7 +85,7 @@ def _patch_real_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         nodes,
         "_fetch_cftc_commitments",
-        lambda transport: (
+        lambda source, transport: (
             {
                 "status": "available",
                 "report_date": "2024-01-08",
@@ -96,7 +98,7 @@ def _patch_real_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         nodes,
         "fetch_newsflow",
-        lambda transport: {
+        lambda sources, transport: {
             "status": "available",
             "source": "mainstream-rss",
             "headline_count": 3,
@@ -116,7 +118,7 @@ def _patch_real_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         nodes,
         "fetch_pizza_index",
-        lambda transport: {
+        lambda source, transport: {
             "status": "available",
             "source": "pizzint.watch",
             "doughcon_level": 3,
@@ -138,7 +140,13 @@ async def test_agent_health_check_reports_all_agents_ok(monkeypatch: pytest.Monk
     repository, session_factory = await _repository()
     _patch_real_inputs(monkeypatch)
 
-    def fake_invoke(self: OpenAIAgentClient, agent_name: str, payload: dict[str, object]) -> OpenAIAgentResult:
+    def fake_invoke(
+        self: OpenAIAgentClient,
+        *,
+        agent_name: str,
+        messages: list[dict[str, str]],
+        output_model: type[OpenAIAgentResult],
+    ) -> OpenAIAgentResult:
         return OpenAIAgentResult(
             summary=f"{agent_name} ok",
             direction=ForecastDirection.neutral,
@@ -146,7 +154,7 @@ async def test_agent_health_check_reports_all_agents_ok(monkeypatch: pytest.Monk
             risk_notes=[],
         )
 
-    monkeypatch.setattr(OpenAIAgentClient, "invoke_agent", fake_invoke)
+    monkeypatch.setattr(OpenAIAgentClient, "invoke_messages", fake_invoke)
 
     try:
         report = await run_agent_health_check(settings=_settings(), repository=repository)
@@ -171,7 +179,13 @@ async def test_agent_health_check_reports_partial_failure(monkeypatch: pytest.Mo
     repository, session_factory = await _repository()
     _patch_real_inputs(monkeypatch)
 
-    def fake_invoke(self: OpenAIAgentClient, agent_name: str, payload: dict[str, object]) -> OpenAIAgentResult:
+    def fake_invoke(
+        self: OpenAIAgentClient,
+        *,
+        agent_name: str,
+        messages: list[dict[str, str]],
+        output_model: type[OpenAIAgentResult],
+    ) -> OpenAIAgentResult:
         if agent_name == "news":
             raise OpenAIClientError("news failed")
         return OpenAIAgentResult(
@@ -181,7 +195,7 @@ async def test_agent_health_check_reports_partial_failure(monkeypatch: pytest.Mo
             risk_notes=[],
         )
 
-    monkeypatch.setattr(OpenAIAgentClient, "invoke_agent", fake_invoke)
+    monkeypatch.setattr(OpenAIAgentClient, "invoke_messages", fake_invoke)
 
     try:
         report = await run_agent_health_check(settings=_settings(), repository=repository)
@@ -202,12 +216,18 @@ async def test_agent_health_check_marks_quote_unavailable_when_tradingview_quote
     _patch_real_inputs(monkeypatch)
 
     monkeypatch.setattr(
-        nodes.CurrentQuoteProvider,
+        nodes.TradingViewQuoteProvider,
         "fetch",
         lambda self: (_ for _ in ()).throw(QuoteProviderError("TradingView quote request failed")),
     )
 
-    def fake_invoke(self: OpenAIAgentClient, agent_name: str, payload: dict[str, object]) -> OpenAIAgentResult:
+    def fake_invoke(
+        self: OpenAIAgentClient,
+        *,
+        agent_name: str,
+        messages: list[dict[str, str]],
+        output_model: type[OpenAIAgentResult],
+    ) -> OpenAIAgentResult:
         return OpenAIAgentResult(
             summary=f"{agent_name} ok",
             direction=ForecastDirection.neutral,
@@ -215,7 +235,7 @@ async def test_agent_health_check_marks_quote_unavailable_when_tradingview_quote
             risk_notes=[],
         )
 
-    monkeypatch.setattr(OpenAIAgentClient, "invoke_agent", fake_invoke)
+    monkeypatch.setattr(OpenAIAgentClient, "invoke_messages", fake_invoke)
 
     try:
         report = await run_agent_health_check(settings=_settings(), repository=repository)

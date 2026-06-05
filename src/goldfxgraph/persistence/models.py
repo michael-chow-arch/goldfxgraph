@@ -80,6 +80,37 @@ class PromptTemplateModel(Base):
     )
 
 
+class ExternalSourceModel(Base):
+    __tablename__ = "external_sources"
+    __table_args__ = (
+        UniqueConstraint("source_key", "version", name="uq_external_sources_source_key_version"),
+        CheckConstraint("source_key <> ''", name="ck_external_sources_source_key_not_empty"),
+        CheckConstraint("version <> ''", name="ck_external_sources_version_not_empty"),
+        CheckConstraint("endpoint_url <> ''", name="ck_external_sources_endpoint_url_not_empty"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    source_key: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    source_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    endpoint_url: Mapped[str] = mapped_column(Text, nullable=False)
+    request_config: Mapped[dict[str, Any]] = mapped_column(
+        MutableDict.as_mutable(JSON),
+        default=dict,
+        nullable=False,
+    )
+    version: Mapped[str] = mapped_column(String(64), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    change_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
+    )
+
+
 class ResearchRunModel(Base):
     __tablename__ = "research_runs"
 

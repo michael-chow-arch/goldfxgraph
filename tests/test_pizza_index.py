@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import httpx
 
+from goldfxgraph.persistence.external_source_registry import ExternalSourceSnapshot
 from goldfxgraph.market_data.pizza_index import fetch_pizza_index
 
 
@@ -28,7 +31,21 @@ def test_fetch_pizza_index_parses_public_dashboard_snapshot() -> None:
         assert request.url.host == "www.pizzint.watch"
         return httpx.Response(200, text=html, request=request)
 
-    result = fetch_pizza_index(httpx.MockTransport(handler))
+    source = ExternalSourceSnapshot(
+        id=1,
+        source_key="alt.pizzint.watch",
+        source_type="html",
+        endpoint_url="https://www.pizzint.watch/",
+        request_config={"source_name": "Pizzint Watch"},
+        version="1.0.0",
+        is_active=True,
+        description="测试外部源",
+        change_notes="测试数据",
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+
+    result = fetch_pizza_index(source, httpx.MockTransport(handler))
 
     assert result["status"] == "available"
     assert result["doughcon_level"] == 3

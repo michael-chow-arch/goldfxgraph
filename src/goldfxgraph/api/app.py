@@ -15,8 +15,9 @@ from goldfxgraph.api.routes import router
 from goldfxgraph.diagnostics.agent_health import format_agent_health_check_report, run_agent_health_check
 from goldfxgraph.packages.common.settings import GoldFXGraphSettings, get_settings
 from goldfxgraph.persistence.database import create_session_factory, init_models
+from goldfxgraph.persistence.seed_external_sources import validate_required_external_sources
 from goldfxgraph.persistence.repositories import ForecastRepository
-from goldfxgraph.persistence.seed_prompt_templates import seed_default_committee_prompt_templates
+from goldfxgraph.persistence.seed_prompt_templates import validate_required_prompt_templates
 from goldfxgraph.research.scheduler import ResearchSchedulerHandle, start_research_scheduler
 from goldfxgraph.schemas.forecast import DailyBar, ForecastResult, ResearchRunResult, SchedulerRunStatus
 
@@ -51,7 +52,8 @@ def create_app(
         else:
             session_factory = create_session_factory(resolved_settings.database_url)
             await init_models(session_factory.engine)
-            await seed_default_committee_prompt_templates(session_factory)
+            await validate_required_prompt_templates(session_factory)
+            await validate_required_external_sources(session_factory)
             app.state.session_factory = session_factory
             app.state.repository = ForecastRepository(session_factory)
 

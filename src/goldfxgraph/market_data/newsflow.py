@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
 from xml.etree import ElementTree as ET
 
 import httpx
+
+from goldfxgraph.persistence.external_source_registry import ExternalSourceSnapshot
 
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -101,23 +102,11 @@ HEADLINE_WORD_REPLACEMENTS: tuple[tuple[str, str], ...] = (
 )
 
 
-@dataclass(frozen=True)
-class NewsFeedSource:
-    name: str
-    url: str
-
-
-DEFAULT_NEWSFLOW_SOURCES: tuple[NewsFeedSource, ...] = (
-    NewsFeedSource(name="CNBC Markets", url="https://www.cnbc.com/id/100003114/device/rss/rss.html"),
-    NewsFeedSource(name="MarketWatch Top Stories", url="https://www.marketwatch.com/rss/topstories"),
-    NewsFeedSource(
-        name="Google News Gold",
-        url="https://news.google.com/rss/search?q=gold+market+when:1d&hl=en-US&gl=US&ceid=US:en",
-    ),
-    NewsFeedSource(
-        name="Google News Rates",
-        url="https://news.google.com/rss/search?q=Fed+inflation+dollar+gold+when:1d&hl=en-US&gl=US&ceid=US:en",
-    ),
+NEWSFLOW_SOURCE_KEYS: tuple[str, ...] = (
+    "newsflow.cnbc_markets",
+    "newsflow.marketwatch_top_stories",
+    "newsflow.google_news_gold",
+    "newsflow.google_news_rates",
 )
 
 
@@ -126,9 +115,9 @@ class NewsflowError(RuntimeError):
 
 
 def fetch_newsflow(
+    sources: tuple[ExternalSourceSnapshot, ...],
     transport: httpx.BaseTransport | None = None,
     *,
-    sources: tuple[NewsFeedSource, ...] = DEFAULT_NEWSFLOW_SOURCES,
     headline_limit: int = 12,
 ) -> dict[str, Any]:
     feed_statuses: list[dict[str, Any]] = []
@@ -138,14 +127,14 @@ def fetch_newsflow(
     with httpx.Client(transport=transport, timeout=20, follow_redirects=True, headers=headers) as client:
         for source in sources:
             try:
-                response = client.get(source.url)
+                response = client.get(source.endpoint_url)
                 response.raise_for_status()
-                feed_items = _parse_feed_items(response.text, source.name)
+                feed_items = _parse_feed_items(response.text, _source_name(source))
                 items.extend(feed_items)
                 feed_statuses.append(
                     {
-                        "source": source.name,
-                        "url": source.url,
+                        "source": _source_name(source),
+                        "url": source.endpoint_url,
                         "status": "available" if feed_items else "empty",
                         "item_count": len(feed_items),
                     }
@@ -153,8 +142,8 @@ def fetch_newsflow(
             except (httpx.HTTPError, NewsflowError) as exc:
                 feed_statuses.append(
                     {
-                        "source": source.name,
-                        "url": source.url,
+                        "source": _source_name(source),
+                        "url": source.endpoint_url,
                         "status": "unavailable",
                         "error": str(exc),
                     }
@@ -213,6 +202,12 @@ def _parse_feed_items(xml_text: str, source_name: str) -> list[dict[str, Any]]:
     if items:
         return items
     raise NewsflowError("news feed does not contain RSS or Atom items")
+
+
+def _source_name(source: ExternalSourceSnapshot) -> str:
+    value = source.request_config.get("source_name")
+    rendered = str(value or "").strip()
+    return rendered or source.source_key
 
 
 def _parse_rss_items(root: ET.Element, source_name: str) -> list[dict[str, Any]]:

@@ -21,7 +21,7 @@ def test_settings_loads_from_explicit_env_file(tmp_path: Path) -> None:
                 "GOLDFXGRAPH_ENV=local",
                 "GOLDFXGRAPH_LOG_LEVEL=DEBUG",
                 "GOLDFXGRAPH_DATABASE_URL=postgresql+asyncpg://u:p@localhost:5432/db",
-                "GOLDFXGRAPH_XAUUSD_CSV_PATH=data/raw/xauusd_d.csv",
+                "GOLDFXGRAPH_XAUUSD_CSV_PATH=data/raw/xauusd_daily.csv",
                 "GOLDFXGRAPH_CURRENT_QUOTE_URL=https://example.test/quote",
                 "GOLDFXGRAPH_AGENT_API_BASE_URL=https://agent.example.test/v1",
                 "GOLDFXGRAPH_AGENT_API_KEY=agent-key",
@@ -34,7 +34,7 @@ def test_settings_loads_from_explicit_env_file(tmp_path: Path) -> None:
 
     assert settings.env == "local"
     assert settings.log_level == "DEBUG"
-    assert str(settings.xauusd_csv_path) == "data/raw/xauusd_d.csv"
+    assert str(settings.xauusd_csv_path) == "data/raw/xauusd_daily.csv"
     assert settings.agent_api_base_url == "https://agent.example.test/v1"
     assert settings.agent_api_key is not None
     assert settings.agent_api_key.get_secret_value() == "agent-key"
@@ -86,7 +86,7 @@ def test_environment_variables_override_env_file(tmp_path: Path, monkeypatch: Mo
         "\n".join(
             [
                 "GOLDFXGRAPH_LOG_LEVEL=INFO",
-                "GOLDFXGRAPH_XAUUSD_CSV_PATH=data/raw/xauusd_d.csv",
+                "GOLDFXGRAPH_XAUUSD_CSV_PATH=data/raw/xauusd_daily.csv",
             ]
         ),
         encoding="utf-8",

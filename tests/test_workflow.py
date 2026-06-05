@@ -1,3 +1,4 @@
+import asyncio
 import json
 from datetime import UTC, date, datetime
 
@@ -9,9 +10,9 @@ from goldfxgraph.indicators.technical import compute_technical_indicators
 from goldfxgraph.llm.openai_client import OpenAIAgentResult
 from goldfxgraph.market_data.current_quote import QuoteProviderError
 from goldfxgraph.packages.common.settings import GoldFXGraphSettings
+from goldfxgraph.persistence.external_source_registry import ExternalSourceSnapshot
 from goldfxgraph.persistence.database import create_session_factory, init_models
 from goldfxgraph.persistence.repositories import ForecastRepository
-from goldfxgraph.persistence.seed_prompt_templates import seed_default_committee_prompt_templates
 from goldfxgraph.schemas.forecast import (
     Actionability,
     AgentVote,
@@ -66,12 +67,20 @@ from goldfxgraph.workflow.nodes import (
     tool_persist_forecast,
     tool_persist_research_run,
 )
+from conftest import seed_runtime_registry
 
 
 def _merge_state(state: dict[str, object], delta: dict[str, object]) -> dict[str, object]:
     merged = dict(state)
     merged.update(delta)
     return merged
+
+
+async def _runtime_repository() -> tuple[ForecastRepository, object]:
+    session_factory = create_session_factory("sqlite+aiosqlite:///:memory:")
+    await init_models(session_factory.engine)
+    await seed_runtime_registry(session_factory)
+    return ForecastRepository(session_factory), session_factory
 
 
 def _bars() -> list[DailyBar]:
@@ -445,18 +454,19 @@ def test_tool_fetch_current_gold_quote_uses_tradingview_source(monkeypatch: pyte
         data_source="TradingView",
         data_timestamp=datetime.now(UTC),
     )
-    monkeypatch.setattr(
-        "goldfxgraph.workflow.nodes.CurrentQuoteProvider.fetch",
-        lambda self: expected_quote,
-    )
+
+    class FakeProvider:
+        def fetch(self) -> CurrentQuote:
+            return expected_quote
 
     state = WorkflowState(
         settings=GoldFXGraphSettings(),
         latest_bar=bars[-1],
         bars=bars,
+        quote_provider=FakeProvider(),
     )
 
-    result = tool_fetch_current_gold_quote(state)
+    result = asyncio.run(tool_fetch_current_gold_quote(state))
 
     assert result["quote"].data_source == "TradingView"
     assert result["quote"].current_price == 2051.75
@@ -465,24 +475,25 @@ def test_tool_fetch_current_gold_quote_uses_tradingview_source(monkeypatch: pyte
 
 def test_tool_fetch_current_gold_quote_rejects_non_tradingview_source(monkeypatch: pytest.MonkeyPatch) -> None:
     bars = _bars()
-    monkeypatch.setattr(
-        "goldfxgraph.workflow.nodes.CurrentQuoteProvider.fetch",
-        lambda self: CurrentQuote(
-            symbol="XAUUSD",
-            current_price=2051.75,
-            data_source="legacy-quote-api",
-            data_timestamp=datetime.now(UTC),
-        ),
-    )
+
+    class FakeProvider:
+        def fetch(self) -> CurrentQuote:
+            return CurrentQuote(
+                symbol="XAUUSD",
+                current_price=2051.75,
+                data_source="legacy-quote-api",
+                data_timestamp=datetime.now(UTC),
+            )
 
     state = WorkflowState(
         settings=GoldFXGraphSettings(),
         latest_bar=bars[-1],
         bars=bars,
+        quote_provider=FakeProvider(),
     )
 
     with pytest.raises(QuoteProviderError, match="non-TradingView data source"):
-        tool_fetch_current_gold_quote(state)
+        asyncio.run(tool_fetch_current_gold_quote(state))
 
 
 def test_agent_node_uses_configured_agent_api_without_leaking_key() -> None:
@@ -514,8 +525,10 @@ def test_agent_node_uses_configured_agent_api_without_leaking_key() -> None:
         openai_model="gpt-4.1-mini",
         openai_api_key=SecretStr("secret-token"),
     )
+    repo, session_factory = asyncio.run(_runtime_repository())
     state = WorkflowState(
         settings=settings,
+        repository=repo,
         agent_http_transport=httpx.MockTransport(handler),
         macro_inputs={
             "dollar_index": {"status": "available"},
@@ -523,7 +536,10 @@ def test_agent_node_uses_configured_agent_api_without_leaking_key() -> None:
         },
     )
 
-    state = _merge_state(state, agent_macro_analysis(state))
+    try:
+        state = _merge_state(state, asyncio.run(agent_macro_analysis(state)))
+    finally:
+        asyncio.run(session_factory.engine.dispose())
 
     assert len(requests) == 1
     request = requests[0]
@@ -552,12 +568,14 @@ def test_agent_node_uses_configured_agent_api_without_leaking_key() -> None:
 
 def test_macro_node_uses_real_macro_inputs_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
     bars = _bars()
+    repo, session_factory = asyncio.run(_runtime_repository())
     state = WorkflowState(
         settings=GoldFXGraphSettings(
             openai_base_url=None,
             openai_model="gpt-4.1-mini",
             openai_api_key=SecretStr("secret-token"),
         ),
+        repository=repo,
         latest_bar=bars[-1],
         quote=_quote(),
         indicators=compute_technical_indicators(bars),
@@ -565,7 +583,7 @@ def test_macro_node_uses_real_macro_inputs_when_available(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(
         "goldfxgraph.workflow.nodes._fetch_dollar_index",
-        lambda transport: (
+        lambda source, transport: (
             {
                 "status": "available",
                 "source": "fred",
@@ -577,7 +595,7 @@ def test_macro_node_uses_real_macro_inputs_when_available(monkeypatch: pytest.Mo
     )
     monkeypatch.setattr(
         "goldfxgraph.workflow.nodes._fetch_real_rates",
-        lambda transport: (
+        lambda source, transport: (
             {
                 "status": "available",
                 "source": "fred",
@@ -588,8 +606,11 @@ def test_macro_node_uses_real_macro_inputs_when_available(monkeypatch: pytest.Mo
         ),
     )
 
-    state = _merge_state(state, tool_fetch_macro_inputs(state))
-    state = _merge_state(state, agent_macro_analysis(state))
+    try:
+        state = _merge_state(state, asyncio.run(tool_fetch_macro_inputs(state)))
+        state = _merge_state(state, asyncio.run(agent_macro_analysis(state)))
+    finally:
+        asyncio.run(session_factory.engine.dispose())
 
     assert state.get("unavailable_signals", []) == []
     assert state.get("macro_summary", "").startswith("失败：macro agent")
@@ -614,7 +635,7 @@ def test_agent_node_uses_failure_summary_without_agent_api() -> None:
         agent_http_transport=httpx.MockTransport(handler),
     )
 
-    state = _merge_state(state, agent_technical_analysis(state))
+    state = _merge_state(state, asyncio.run(agent_technical_analysis(state)))
 
     assert called is False
     agent_votes = state.get("agent_votes")
@@ -635,19 +656,50 @@ def test_agent_node_uses_failure_summary_without_complete_openai_config() -> Non
         called = True
         raise AssertionError("OpenAI-compatible client should not be called with incomplete config")
 
+    repo, session_factory = asyncio.run(_runtime_repository())
+    async def fake_get_active_source(self: object, source_key: str) -> ExternalSourceSnapshot:
+        if source_key != "llm.openai.analysis":
+            raise AssertionError(f"unexpected source key: {source_key}")
+        return ExternalSourceSnapshot(
+            id=999,
+            source_key=source_key,
+            source_type="llm",
+            endpoint_url="https://agent.example.test/v1",
+            request_config={
+                "model": None,
+                "api_key": "secret-token",
+            },
+            version="1.0.0",
+            is_active=True,
+            description=None,
+            change_notes=None,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        "goldfxgraph.persistence.external_source_registry.ExternalSourceRegistryService.get_active_source",
+        fake_get_active_source,
+    )
     state = WorkflowState(
         settings=GoldFXGraphSettings(
             openai_base_url="https://agent.example.test/v1",
             openai_model=None,
             openai_api_key=SecretStr("secret-token"),
         ),
+        repository=repo,
         latest_bar=bars[-1],
         quote=_quote(),
         indicators=compute_technical_indicators(bars),
         agent_http_transport=httpx.MockTransport(handler),
     )
 
-    state = _merge_state(state, agent_technical_analysis(state))
+    try:
+        state = _merge_state(state, asyncio.run(agent_technical_analysis(state)))
+    finally:
+        monkeypatch.undo()
+        asyncio.run(session_factory.engine.dispose())
 
     assert called is False
     assert state.get("technical_summary", "").startswith("失败：technical agent")
@@ -666,25 +718,56 @@ def test_agent_node_reports_placeholder_secret_as_unconfigured() -> None:
         called = True
         raise AssertionError("OpenAI-compatible client should not be called with placeholder key")
 
+    repo, session_factory = asyncio.run(_runtime_repository())
+    async def fake_get_active_source(self: object, source_key: str) -> ExternalSourceSnapshot:
+        if source_key != "llm.openai.analysis":
+            raise AssertionError(f"unexpected source key: {source_key}")
+        return ExternalSourceSnapshot(
+            id=999,
+            source_key=source_key,
+            source_type="llm",
+            endpoint_url="https://agent.example.test/v1",
+            request_config={
+                "model": "gpt-4.1-mini",
+                "api_key": None,
+            },
+            version="1.0.0",
+            is_active=True,
+            description=None,
+            change_notes=None,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        "goldfxgraph.persistence.external_source_registry.ExternalSourceRegistryService.get_active_source",
+        fake_get_active_source,
+    )
     state = WorkflowState(
         settings=GoldFXGraphSettings(
             openai_base_url="https://agent.example.test/v1",
             openai_model="gpt-4.1-mini",
             openai_api_key=SecretStr("change_me"),
         ),
+        repository=repo,
         latest_bar=bars[-1],
         quote=_quote(),
         indicators=compute_technical_indicators(bars),
         agent_http_transport=httpx.MockTransport(handler),
     )
 
-    state = _merge_state(state, agent_technical_analysis(state))
+    try:
+        state = _merge_state(state, asyncio.run(agent_technical_analysis(state)))
+    finally:
+        monkeypatch.undo()
+        asyncio.run(session_factory.engine.dispose())
 
     assert called is False
     assert state.get("technical_summary", "").startswith("失败：technical agent")
     assert state.get("agent_diagnostics") is not None
     assert state["agent_diagnostics"][0]["agent"] == "technical"
-    assert "未配置有效 base_url/model/API Key" in state["agent_diagnostics"][0]["message"]
+    assert "LLM 配置缺少 model 或 api_key" in state["agent_diagnostics"][0]["message"]
 
 
 def test_forecast_planning_aligns_direction_and_levels_with_agent_votes() -> None:
@@ -760,12 +843,14 @@ def test_agent_node_falls_back_deterministically_when_openai_response_is_invalid
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=b"not-json")
 
+    repo, session_factory = asyncio.run(_runtime_repository())
     state = WorkflowState(
         settings=GoldFXGraphSettings(
             openai_base_url="https://agent.example.test/v1",
             openai_model="gpt-4.1-mini",
             openai_api_key=SecretStr("secret-token"),
         ),
+        repository=repo,
         latest_bar=bars[-1],
         quote=_quote(),
         indicators=compute_technical_indicators(bars),
@@ -773,7 +858,10 @@ def test_agent_node_falls_back_deterministically_when_openai_response_is_invalid
     )
 
     caplog.set_level("WARNING")
-    state = _merge_state(state, agent_technical_analysis(state))
+    try:
+        state = _merge_state(state, asyncio.run(agent_technical_analysis(state)))
+    finally:
+        asyncio.run(session_factory.engine.dispose())
 
     assert state.get("technical_summary", "").startswith("失败：technical agent")
     agent_votes = state.get("agent_votes")
@@ -793,18 +881,23 @@ def test_agent_node_falls_back_deterministically_when_openai_response_is_invalid
 def test_sentiment_and_alt_data_nodes_fail_without_openai() -> None:
     bars = _bars()
     quote = _quote()
+    repo, session_factory = asyncio.run(_runtime_repository())
     state = WorkflowState(
         settings=GoldFXGraphSettings(openai_base_url=None, openai_model=None),
+        repository=repo,
         latest_bar=bars[-1],
         quote=quote,
         indicators=compute_technical_indicators(bars),
         forecast_feedback_history=["上一轮看多后回撤偏大"],
     )
 
-    state = _merge_state(state, tool_fetch_market_sentiment_inputs(state))
-    state = _merge_state(state, tool_fetch_alt_data_inputs(state))
-    state = _merge_state(state, agent_market_sentiment_analysis(state))
-    state = _merge_state(state, agent_alt_data_analysis(state))
+    try:
+        state = _merge_state(state, asyncio.run(tool_fetch_market_sentiment_inputs(state)))
+        state = _merge_state(state, asyncio.run(tool_fetch_alt_data_inputs(state)))
+        state = _merge_state(state, asyncio.run(agent_market_sentiment_analysis(state)))
+        state = _merge_state(state, asyncio.run(agent_alt_data_analysis(state)))
+    finally:
+        asyncio.run(session_factory.engine.dispose())
 
     assert state.get("market_sentiment_summary", "").startswith("失败：market_sentiment agent")
     assert state.get("alt_data_summary", "").startswith("失败：alt_data agent")
@@ -817,6 +910,7 @@ def test_sentiment_and_alt_data_nodes_fail_without_openai() -> None:
 def test_sentiment_and_alt_data_nodes_use_external_signals_when_available() -> None:
     bars = _bars()
     quote = _quote()
+    repo, session_factory = asyncio.run(_runtime_repository())
 
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
@@ -848,6 +942,7 @@ def test_sentiment_and_alt_data_nodes_use_external_signals_when_available() -> N
 
     state = WorkflowState(
         settings=GoldFXGraphSettings(openai_base_url=None, openai_model=None),
+        repository=repo,
         latest_bar=bars[-1],
         quote=quote,
         indicators=compute_technical_indicators(bars),
@@ -855,10 +950,13 @@ def test_sentiment_and_alt_data_nodes_use_external_signals_when_available() -> N
         signal_http_transport=httpx.MockTransport(handler),
     )
 
-    state = _merge_state(state, tool_fetch_market_sentiment_inputs(state))
-    state = _merge_state(state, tool_fetch_alt_data_inputs(state))
-    state = _merge_state(state, agent_market_sentiment_analysis(state))
-    state = _merge_state(state, agent_alt_data_analysis(state))
+    try:
+        state = _merge_state(state, asyncio.run(tool_fetch_market_sentiment_inputs(state)))
+        state = _merge_state(state, asyncio.run(tool_fetch_alt_data_inputs(state)))
+        state = _merge_state(state, asyncio.run(agent_market_sentiment_analysis(state)))
+        state = _merge_state(state, asyncio.run(agent_alt_data_analysis(state)))
+    finally:
+        asyncio.run(session_factory.engine.dispose())
 
     unavailable = state.get("unavailable_signals", [])
     assert "cftc_commitments" not in unavailable
@@ -874,6 +972,7 @@ def test_sentiment_and_alt_data_nodes_use_external_signals_when_available() -> N
 def test_polymarket_inputs_feed_market_sentiment_summary() -> None:
     bars = _bars()
     quote = _quote()
+    repo, session_factory = asyncio.run(_runtime_repository())
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.host == "polymarket.com":
@@ -935,6 +1034,7 @@ def test_polymarket_inputs_feed_market_sentiment_summary() -> None:
 
     state = WorkflowState(
         settings=GoldFXGraphSettings(openai_base_url=None, openai_model=None),
+        repository=repo,
         latest_bar=bars[-1],
         quote=quote,
         indicators=compute_technical_indicators(bars),
@@ -949,9 +1049,12 @@ def test_polymarket_inputs_feed_market_sentiment_summary() -> None:
         },
     )
 
-    state = _merge_state(state, tool_fetch_polymarket_inputs(state))
-    state = _merge_state(state, tool_fetch_market_sentiment_inputs(state))
-    state = _merge_state(state, agent_market_sentiment_analysis(state))
+    try:
+        state = _merge_state(state, asyncio.run(tool_fetch_polymarket_inputs(state)))
+        state = _merge_state(state, asyncio.run(tool_fetch_market_sentiment_inputs(state)))
+        state = _merge_state(state, asyncio.run(agent_market_sentiment_analysis(state)))
+    finally:
+        asyncio.run(session_factory.engine.dispose())
 
     polymarket_inputs = state.get("polymarket_inputs")
     assert polymarket_inputs is not None
@@ -964,6 +1067,7 @@ def test_polymarket_inputs_feed_market_sentiment_summary() -> None:
 def test_newsflow_node_uses_mainstream_media_rss_when_available() -> None:
     bars = _bars()
     quote = _quote()
+    repo, session_factory = asyncio.run(_runtime_repository())
 
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
@@ -1014,14 +1118,18 @@ def test_newsflow_node_uses_mainstream_media_rss_when_available() -> None:
 
     state = WorkflowState(
         settings=GoldFXGraphSettings(openai_base_url=None, openai_model=None),
+        repository=repo,
         latest_bar=bars[-1],
         quote=quote,
         indicators=compute_technical_indicators(bars),
         signal_http_transport=httpx.MockTransport(handler),
     )
 
-    state = _merge_state(state, tool_fetch_newsflow_inputs(state))
-    state = _merge_state(state, agent_news_analysis(state))
+    try:
+        state = _merge_state(state, asyncio.run(tool_fetch_newsflow_inputs(state)))
+        state = _merge_state(state, asyncio.run(agent_news_analysis(state)))
+    finally:
+        asyncio.run(session_factory.engine.dispose())
 
     newsflow_inputs = state.get("newsflow_inputs")
     assert newsflow_inputs is not None
@@ -1034,6 +1142,7 @@ def test_newsflow_node_uses_mainstream_media_rss_when_available() -> None:
 def test_pizza_index_node_uses_public_dashboard_snapshot_when_available() -> None:
     bars = _bars()
     quote = _quote()
+    repo, session_factory = asyncio.run(_runtime_repository())
 
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
@@ -1076,15 +1185,19 @@ def test_pizza_index_node_uses_public_dashboard_snapshot_when_available() -> Non
 
     state = WorkflowState(
         settings=GoldFXGraphSettings(openai_base_url=None, openai_model=None),
+        repository=repo,
         latest_bar=bars[-1],
         quote=quote,
         indicators=compute_technical_indicators(bars),
         signal_http_transport=httpx.MockTransport(handler),
     )
 
-    state = _merge_state(state, tool_fetch_pizza_index_inputs(state))
-    state = _merge_state(state, tool_fetch_alt_data_inputs(state))
-    state = _merge_state(state, agent_alt_data_analysis(state))
+    try:
+        state = _merge_state(state, asyncio.run(tool_fetch_pizza_index_inputs(state)))
+        state = _merge_state(state, asyncio.run(tool_fetch_alt_data_inputs(state)))
+        state = _merge_state(state, asyncio.run(agent_alt_data_analysis(state)))
+    finally:
+        asyncio.run(session_factory.engine.dispose())
 
     pizza_index_inputs = state.get("pizza_index_inputs")
     assert pizza_index_inputs is not None
@@ -1100,12 +1213,14 @@ def test_pizza_index_node_uses_public_dashboard_snapshot_when_available() -> Non
 def test_market_sentiment_agent_ignores_blank_remote_summary(monkeypatch: pytest.MonkeyPatch) -> None:
     bars = _bars()
     quote = _quote()
+    repo, session_factory = asyncio.run(_runtime_repository())
     state = WorkflowState(
         settings=GoldFXGraphSettings(
             openai_base_url="https://agent.example.test/v1",
             openai_model="gpt-4.1-mini",
             openai_api_key=SecretStr("secret-token"),
         ),
+        repository=repo,
         latest_bar=bars[-1],
         quote=quote,
         indicators=compute_technical_indicators(bars),
@@ -1113,8 +1228,8 @@ def test_market_sentiment_agent_ignores_blank_remote_summary(monkeypatch: pytest
     )
 
     monkeypatch.setattr(
-        "goldfxgraph.llm.openai_client.OpenAIAgentClient.invoke_agent",
-        lambda self, agent_name, payload: OpenAIAgentResult(
+        "goldfxgraph.llm.openai_client.OpenAIAgentClient.invoke_messages",
+        lambda self, agent_name, messages, output_model: OpenAIAgentResult(
             summary="   ",
             direction=ForecastDirection.neutral,
             confidence=0.52,
@@ -1122,8 +1237,11 @@ def test_market_sentiment_agent_ignores_blank_remote_summary(monkeypatch: pytest
         ),
     )
 
-    state = _merge_state(state, tool_fetch_market_sentiment_inputs(state))
-    state = _merge_state(state, agent_market_sentiment_analysis(state))
+    try:
+        state = _merge_state(state, asyncio.run(tool_fetch_market_sentiment_inputs(state)))
+        state = _merge_state(state, asyncio.run(agent_market_sentiment_analysis(state)))
+    finally:
+        asyncio.run(session_factory.engine.dispose())
 
     assert state.get("market_sentiment_summary", "").startswith("失败：market_sentiment agent")
     assert state["market_sentiment_votes"][0].confidence == 0.0
@@ -1306,7 +1424,7 @@ def test_node_build_evidence_package_aggregates_specialist_outputs() -> None:
 async def test_committee_agent_chain_builds_prompts_and_final_forecast() -> None:
     session_factory = create_session_factory("sqlite+aiosqlite:///:memory:")
     await init_models(session_factory.engine)
-    await seed_default_committee_prompt_templates(session_factory)
+    await seed_runtime_registry(session_factory)
     repo = ForecastRepository(session_factory)
     bars = _bars()
     indicators = compute_technical_indicators(bars)

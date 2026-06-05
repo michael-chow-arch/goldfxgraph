@@ -8,7 +8,8 @@ from typing import Any
 
 import httpx
 
-PIZZINT_URL = "https://www.pizzint.watch/"
+from goldfxgraph.persistence.external_source_registry import ExternalSourceSnapshot
+
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -28,9 +29,8 @@ class PizzaLocation:
 
 
 def fetch_pizza_index(
+    source: ExternalSourceSnapshot,
     transport: httpx.BaseTransport | None = None,
-    *,
-    url: str = PIZZINT_URL,
 ) -> dict[str, Any]:
     with httpx.Client(
         transport=transport,
@@ -38,7 +38,7 @@ def fetch_pizza_index(
         follow_redirects=True,
         headers={"User-Agent": USER_AGENT},
     ) as client:
-        response = client.get(url)
+        response = client.get(source.endpoint_url)
         response.raise_for_status()
 
     html = response.text
@@ -86,8 +86,8 @@ def fetch_pizza_index(
 
     return {
         "status": "available",
-        "source": "pizzint.watch",
-        "url": url,
+        "source": _source_name(source),
+        "url": source.endpoint_url,
         "doughcon_level": doughcon["level"] if doughcon else None,
         "doughcon_label": doughcon["label"] if doughcon else None,
         "doughcon_description": doughcon["description"] if doughcon else None,
@@ -179,3 +179,9 @@ def _activity_bias_from_score(score: int) -> str:
 
 def _clean_text(value: str | None) -> str:
     return (value or "").strip()
+
+
+def _source_name(source: ExternalSourceSnapshot) -> str:
+    value = source.request_config.get("source_name")
+    rendered = str(value or "").strip()
+    return rendered or source.source_key

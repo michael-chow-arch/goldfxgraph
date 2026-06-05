@@ -8,40 +8,33 @@ from typing import Any
 
 import httpx
 
-FRED_DOLLAR_INDEX_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DTWEXBGS"
-FRED_REAL_RATES_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DFII10"
-CFTC_GOLD_COMMITMENTS_URL = "https://publicreporting.cftc.gov/resource/6dca-aqww.csv"
-
-CFTC_GOLD_COMMITMENTS_PARAMS: dict[str, str] = {
-    "$select": (
-        "report_date_as_yyyy_mm_dd,commodity_name,open_interest_all,"
-        "noncomm_positions_long_all,noncomm_positions_short_all,"
-        "comm_positions_long_all,comm_positions_short_all"
-    ),
-    "$where": "upper(commodity_name) like '%GOLD%'",
-    "$order": "report_date_as_yyyy_mm_dd DESC",
-    "$limit": "2",
-}
+from goldfxgraph.persistence.external_source_registry import ExternalSourceSnapshot
 
 
 class ExternalSignalError(RuntimeError):
     """外部信号源返回了无效数据或请求失败。"""
 
 
-def fetch_dollar_index(transport: httpx.BaseTransport | None = None) -> dict[str, Any]:
+def fetch_dollar_index(
+    source: ExternalSourceSnapshot,
+    transport: httpx.BaseTransport | None = None,
+) -> dict[str, Any]:
     return _fetch_fred_series(
         transport=transport,
-        url=FRED_DOLLAR_INDEX_URL,
+        source=source,
         series_id="DTWEXBGS",
         series_name="美元指数",
         unit="index",
     )
 
 
-def fetch_real_rates(transport: httpx.BaseTransport | None = None) -> dict[str, Any]:
+def fetch_real_rates(
+    source: ExternalSourceSnapshot,
+    transport: httpx.BaseTransport | None = None,
+) -> dict[str, Any]:
     return _fetch_fred_series(
         transport=transport,
-        url=FRED_REAL_RATES_URL,
+        source=source,
         series_id="DFII10",
         series_name="实际利率",
         unit="percent",
@@ -49,9 +42,15 @@ def fetch_real_rates(transport: httpx.BaseTransport | None = None) -> dict[str, 
     )
 
 
-def fetch_cftc_gold_commitments(transport: httpx.BaseTransport | None = None) -> dict[str, Any]:
+def fetch_cftc_gold_commitments(
+    source: ExternalSourceSnapshot,
+    transport: httpx.BaseTransport | None = None,
+) -> dict[str, Any]:
     with httpx.Client(transport=transport, timeout=20) as client:
-        response = client.get(CFTC_GOLD_COMMITMENTS_URL, params=CFTC_GOLD_COMMITMENTS_PARAMS)
+        response = client.get(
+            source.endpoint_url,
+            params=source.request_config.get("params") or {},
+        )
         response.raise_for_status()
 
     rows = _csv_rows(response.text)
@@ -106,14 +105,14 @@ def fetch_cftc_gold_commitments(transport: httpx.BaseTransport | None = None) ->
 def _fetch_fred_series(
     *,
     transport: httpx.BaseTransport | None,
-    url: str,
+    source: ExternalSourceSnapshot,
     series_id: str,
     series_name: str,
     unit: str,
     change_unit: str | None = None,
 ) -> dict[str, Any]:
     with httpx.Client(transport=transport, timeout=20) as client:
-        response = client.get(url)
+        response = client.get(source.endpoint_url)
         response.raise_for_status()
 
     rows = _csv_rows(response.text)

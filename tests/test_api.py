@@ -12,6 +12,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from goldfxgraph.api.app import create_app
 from goldfxgraph.packages.common.settings import GoldFXGraphSettings
+from goldfxgraph.persistence.database import create_session_factory, init_models
 from goldfxgraph.persistence.models import PromptTemplateModel
 from goldfxgraph.persistence.repositories import ForecastRepository
 from goldfxgraph.schemas.forecast import (
@@ -27,6 +28,7 @@ from goldfxgraph.schemas.forecast import (
     ResearchRunResult,
     SchedulerRunStatus,
 )
+from conftest import seed_runtime_registry
 
 
 class InMemoryForecastRepository:
@@ -202,10 +204,19 @@ def test_startup_registers_research_scheduler(monkeypatch: Any, tmp_path: Path) 
     monkeypatch.setattr("goldfxgraph.api.app.run_agent_health_check", fake_health_check)
     monkeypatch.setattr("goldfxgraph.api.app.start_research_scheduler", fake_start_research_scheduler)
 
+    db_path = tmp_path / "scheduler-startup.sqlite3"
     settings = GoldFXGraphSettings(
         xauusd_csv_path=tmp_path / "unused.csv",
-        database_url="sqlite+aiosqlite:///:memory:",
+        database_url=f"sqlite+aiosqlite:///{db_path}",
     )
+
+    async def _seed_database() -> None:
+        session_factory = create_session_factory(settings.database_url)
+        await init_models(session_factory.engine)
+        await seed_runtime_registry(session_factory)
+        await session_factory.engine.dispose()
+
+    asyncio.run(_seed_database())
 
     with TestClient(
         create_app(testing=False, settings=settings, repository=cast(ForecastRepository, repository))
@@ -217,7 +228,7 @@ def test_startup_registers_research_scheduler(monkeypatch: Any, tmp_path: Path) 
     assert scheduler_task.cancelled()
 
 
-def test_startup_seeds_committee_prompt_templates(monkeypatch: Any, tmp_path: Path) -> None:
+def test_startup_validates_seeded_registry(monkeypatch: Any, tmp_path: Path) -> None:
     from goldfxgraph.research.scheduler import ResearchSchedulerHandle
 
     scheduler_task: asyncio.Task[None] | None = None
@@ -242,6 +253,14 @@ def test_startup_seeds_committee_prompt_templates(monkeypatch: Any, tmp_path: Pa
         xauusd_csv_path=tmp_path / "unused.csv",
         database_url=f"sqlite+aiosqlite:///{db_path}",
     )
+
+    async def _seed_database() -> None:
+        session_factory = create_session_factory(settings.database_url)
+        await init_models(session_factory.engine)
+        await seed_runtime_registry(session_factory)
+        await session_factory.engine.dispose()
+
+    asyncio.run(_seed_database())
 
     with TestClient(create_app(testing=False, settings=settings)) as client:
         session_factory = client.app.state.session_factory

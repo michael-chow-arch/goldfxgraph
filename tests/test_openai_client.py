@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from goldfxgraph.llm.openai_client import OpenAIAgentClient, OpenAIClientError
+from goldfxgraph.llm.openai_client import OpenAIAgentResult
 
 
 def test_openai_client_sends_bearer_header_and_parses_structured_result() -> None:
@@ -35,12 +36,13 @@ def test_openai_client_sends_bearer_header_and_parses_structured_result() -> Non
         transport=httpx.MockTransport(handler),
     )
 
-    result = client.invoke_agent(
-        "technical",
-        {
-            "symbol": "XAUUSD",
-            "latest_bar": {"close": 2345.6},
-        },
+    result = client.invoke_messages(
+        agent_name="technical",
+        messages=[
+            {"role": "system", "content": "你是technical分析师，请用简体中文回答。"},
+            {"role": "user", "content": '{"agent_name":"technical","symbol":"XAUUSD","latest_bar":{"close":2345.6}}'},
+        ],
+        output_model=OpenAIAgentResult,
     )
 
     assert result.summary == "技术面偏多。"
@@ -73,7 +75,11 @@ def test_openai_client_rejects_non_json_response() -> None:
     )
 
     with pytest.raises(OpenAIClientError, match="returned invalid JSON"):
-        client.invoke_agent("macro", {"symbol": "XAUUSD"})
+        client.invoke_messages(
+            agent_name="macro",
+            messages=[{"role": "system", "content": "macro"}, {"role": "user", "content": '{"symbol":"XAUUSD"}'}],
+            output_model=OpenAIAgentResult,
+        )
 
 
 def test_openai_client_rejects_invalid_structured_payload() -> None:
@@ -100,7 +106,11 @@ def test_openai_client_rejects_invalid_structured_payload() -> None:
     )
 
     with pytest.raises(OpenAIClientError, match="returned invalid structured result"):
-        client.invoke_agent("news", {"symbol": "XAUUSD"})
+        client.invoke_messages(
+            agent_name="news",
+            messages=[{"role": "system", "content": "news"}, {"role": "user", "content": '{"symbol":"XAUUSD"}'}],
+            output_model=OpenAIAgentResult,
+        )
 
 
 def test_openai_client_wraps_http_errors() -> None:
@@ -115,7 +125,11 @@ def test_openai_client_wraps_http_errors() -> None:
     )
 
     with pytest.raises(OpenAIClientError, match="HTTP 400"):
-        client.invoke_agent("technical", {"symbol": "XAUUSD"})
+        client.invoke_messages(
+            agent_name="technical",
+            messages=[{"role": "system", "content": "technical"}, {"role": "user", "content": '{"symbol":"XAUUSD"}'}],
+            output_model=OpenAIAgentResult,
+        )
 
 
 def test_openai_client_includes_request_error_chain_in_detail() -> None:
@@ -130,7 +144,11 @@ def test_openai_client_includes_request_error_chain_in_detail() -> None:
     )
 
     with pytest.raises(OpenAIClientError, match="ConnectError: connection refused"):
-        client.invoke_agent("news", {"symbol": "XAUUSD"})
+        client.invoke_messages(
+            agent_name="news",
+            messages=[{"role": "system", "content": "news"}, {"role": "user", "content": '{"symbol":"XAUUSD"}'}],
+            output_model=OpenAIAgentResult,
+        )
 
 
 def test_openai_client_normalizes_string_risk_notes_to_list() -> None:
@@ -159,7 +177,11 @@ def test_openai_client_normalizes_string_risk_notes_to_list() -> None:
         transport=httpx.MockTransport(handler),
     )
 
-    result = client.invoke_agent("technical", {"symbol": "XAUUSD"})
+    result = client.invoke_messages(
+        agent_name="technical",
+        messages=[{"role": "system", "content": "technical"}, {"role": "user", "content": '{"symbol":"XAUUSD"}'}],
+        output_model=OpenAIAgentResult,
+    )
 
     assert result.risk_notes == ["等待宏观数据确认。"]
 
@@ -191,6 +213,10 @@ def test_openai_client_normalizes_conditional_direction_to_neutral() -> None:
         transport=httpx.MockTransport(handler),
     )
 
-    result = client.invoke_agent("technical", {"symbol": "XAUUSD"})
+    result = client.invoke_messages(
+        agent_name="technical",
+        messages=[{"role": "system", "content": "technical"}, {"role": "user", "content": '{"symbol":"XAUUSD"}'}],
+        output_model=OpenAIAgentResult,
+    )
 
     assert result.direction.value == "neutral"

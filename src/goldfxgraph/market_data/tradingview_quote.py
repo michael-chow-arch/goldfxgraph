@@ -18,15 +18,10 @@ from websockets.sync.client import connect as websocket_connect
 from websockets.sync.connection import Connection
 
 from goldfxgraph.market_data.current_quote import QuoteProviderError
+from goldfxgraph.persistence.external_source_registry import ExternalSourceSnapshot
 from goldfxgraph.schemas.forecast import CurrentQuote
 
-DEFAULT_TRADINGVIEW_URL = "https://www.tradingview.com/symbols/XAUUSD/?exchange=FX"
-DEFAULT_TRADINGVIEW_SOURCE = "TradingView"
-DEFAULT_TRADINGVIEW_SYMBOL = "FX:XAUUSD"
 DEFAULT_TRADINGVIEW_LIVE_SYMBOL = "XAUUSD"
-TRADINGVIEW_WEBSOCKET_URL = "wss://data.tradingview.com/socket.io/websocket"
-TRADINGVIEW_WEBSOCKET_ORIGIN = "https://www.tradingview.com"
-TRADINGVIEW_WEBSOCKET_USER_AGENT = "Mozilla/5.0 (compatible; GoldFXGraph/1.0)"
 
 _SOCKET_FRAME_RE = re.compile(r"~m~(\d+)~m~")
 
@@ -36,18 +31,18 @@ QuoteSocketFactory = Callable[..., AbstractContextManager[Connection]]
 class TradingViewQuoteProvider:
     def __init__(
         self,
-        url: str = DEFAULT_TRADINGVIEW_URL,
+        source: ExternalSourceSnapshot,
         transport: httpx.BaseTransport | None = None,
         socket_factory: QuoteSocketFactory | None = None,
     ) -> None:
-        self.url = url
+        self.source = source
         self.transport = transport
         self.socket_factory = socket_factory or _default_socket_factory
 
     def fetch(self) -> CurrentQuote:
         try:
             current_price, data_timestamp = _fetch_live_quote(
-                referer=self.url,
+                source=self.source,
                 socket_factory=self.socket_factory,
             )
         except QuoteProviderError:
@@ -55,11 +50,12 @@ class TradingViewQuoteProvider:
         except Exception as exc:  # noqa: BLE001
             raise QuoteProviderError("TradingView quote request failed") from exc
 
+        source_name = _require_source_name(self.source)
         try:
             quote = CurrentQuote(
                 symbol=DEFAULT_TRADINGVIEW_LIVE_SYMBOL,
                 current_price=current_price,
-                data_source=DEFAULT_TRADINGVIEW_SOURCE,
+                data_source=source_name,
                 data_timestamp=data_timestamp,
             )
         except ValidationError as exc:
@@ -73,10 +69,13 @@ class TradingViewQuoteProvider:
 
 
 def _fetch_live_quote(
-    referer: str,
+    source: ExternalSourceSnapshot,
     socket_factory: QuoteSocketFactory,
 ) -> tuple[float, datetime]:
-    socket_url = _build_socket_url()
+    socket_url = _build_socket_url(source)
+    origin = _require_request_config_value(source, "origin")
+    user_agent = _require_request_config_value(source, "user_agent")
+    referer = source.endpoint_url
     ssl_context = ssl.create_default_context(cafile=certifi.where())
     price: float | None = None
     data_timestamp: datetime | None = None
@@ -84,9 +83,9 @@ def _fetch_live_quote(
 
     with socket_factory(
         socket_url=socket_url,
-        origin=TRADINGVIEW_WEBSOCKET_ORIGIN,
+        origin=origin,
         referer=referer,
-        user_agent=TRADINGVIEW_WEBSOCKET_USER_AGENT,
+        user_agent=user_agent,
         ssl_context=ssl_context,
     ) as socket:
         session_name = "qs_goldfxgraph"
@@ -98,8 +97,9 @@ def _fetch_live_quote(
                 "p": [session_name, "lp", "lp_time", "trade_loaded"],
             },
         )
-        _send_socket_message(socket, {"m": "quote_add_symbols", "p": [session_name, DEFAULT_TRADINGVIEW_SYMBOL]})
-        _send_socket_message(socket, {"m": "quote_fast_symbols", "p": [session_name, DEFAULT_TRADINGVIEW_SYMBOL]})
+        symbol = _require_request_config_value(source, "symbol")
+        _send_socket_message(socket, {"m": "quote_add_symbols", "p": [session_name, symbol]})
+        _send_socket_message(socket, {"m": "quote_fast_symbols", "p": [session_name, symbol]})
 
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
@@ -132,15 +132,36 @@ def _fetch_live_quote(
         raise QuoteProviderError("TradingView quote websocket missing live price or timestamp")
 
 
-def _build_socket_url() -> str:
+def _require_request_config_value(source: ExternalSourceSnapshot, key: str) -> str:
+    value = source.request_config.get(key)
+    rendered = str(value or "").strip()
+    if not rendered:
+        raise QuoteProviderError(f"TradingView quote source is missing required config: {key}")
+    return rendered
+
+
+def _require_source_name(source: ExternalSourceSnapshot) -> str:
+    source_name = source.request_config.get("source_name")
+    rendered = str(source_name or "").strip()
+    return rendered or "TradingView"
+
+
+def _build_socket_url(source: ExternalSourceSnapshot) -> str:
+    base_url = _require_request_config_value(source, "socket_url")
+    socket_from = str(source.request_config.get("socket_from") or "").strip()
+    if not socket_from:
+        raise QuoteProviderError("TradingView quote source is missing required config: socket_from")
+    auth = str(source.request_config.get("auth") or "").strip()
+    if not auth:
+        raise QuoteProviderError("TradingView quote source is missing required config: auth")
     query = urllib.parse.urlencode(
         {
-            "from": "symbols/XAUUSD/",
+            "from": socket_from,
             "date": datetime.now(UTC).isoformat(timespec="seconds"),
-            "auth": "sessionid",
+            "auth": auth,
         }
     )
-    return f"{TRADINGVIEW_WEBSOCKET_URL}?{query}"
+    return f"{base_url}?{query}"
 
 
 def _default_socket_factory(

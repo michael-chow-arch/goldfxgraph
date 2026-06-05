@@ -1,21 +1,26 @@
 """Persistence boundary package."""
 
 from goldfxgraph.persistence.database import SessionFactory, create_session_factory, init_models
+from goldfxgraph.persistence.external_source_registry import ExternalSourceRegistryService, ExternalSourceSnapshot
 from goldfxgraph.persistence.repositories import ForecastRepository
 from goldfxgraph.persistence.seed_prompt_templates import (
-    DEFAULT_COMMITTEE_PROMPT_KEYS,
-    DEFAULT_COMMITTEE_PROMPT_SEEDS,
-    DEFAULT_COMMITTEE_PROMPT_VERSION,
-    seed_default_committee_prompt_templates,
+    REQUIRED_ANALYSIS_PROMPT_KEYS,
+    REQUIRED_COMMITTEE_PROMPT_KEYS,
+    REQUIRED_PROMPT_KEYS,
+    PromptRegistryValidationError,
+    validate_required_prompt_templates,
 )
 
 __all__ = [
     "ForecastRepository",
-    "DEFAULT_COMMITTEE_PROMPT_KEYS",
-    "DEFAULT_COMMITTEE_PROMPT_SEEDS",
-    "DEFAULT_COMMITTEE_PROMPT_VERSION",
+    "ExternalSourceRegistryService",
+    "ExternalSourceSnapshot",
     "SessionFactory",
+    "PromptRegistryValidationError",
+    "REQUIRED_ANALYSIS_PROMPT_KEYS",
+    "REQUIRED_COMMITTEE_PROMPT_KEYS",
+    "REQUIRED_PROMPT_KEYS",
     "create_session_factory",
     "init_models",
-    "seed_default_committee_prompt_templates",
+    "validate_required_prompt_templates",
 ]

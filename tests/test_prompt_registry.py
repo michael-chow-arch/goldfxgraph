@@ -9,10 +9,8 @@ from goldfxgraph.persistence.prompt_registry import (
     PromptTemplateService,
     PromptTemplateVariableError,
 )
-from goldfxgraph.persistence.seed_prompt_templates import (
-    DEFAULT_COMMITTEE_PROMPT_VERSION,
-    seed_default_committee_prompt_templates,
-)
+
+from conftest import seed_required_prompt_templates
 
 pytestmark = pytest.mark.asyncio
 
@@ -155,15 +153,15 @@ async def test_get_active_prompt_rejects_inactive_version_when_no_active_exists(
 async def test_seeded_committee_prompt_templates_are_loadable_and_renderable() -> None:
     session_factory = create_session_factory("sqlite+aiosqlite:///:memory:")
     await init_models(session_factory.engine)
-    await seed_default_committee_prompt_templates(session_factory)
+    await seed_required_prompt_templates(session_factory)
 
     service = PromptTemplateService(session_factory)
 
     chair_system = await service.get_active_prompt("trading_committee.chair.system")
-    assert chair_system.version == DEFAULT_COMMITTEE_PROMPT_VERSION
+    assert chair_system.version == "1.0.0"
     assert chair_system.is_active is True
     assert chair_system.prompt_type == "system"
-    assert "仲裁者" in chair_system.prompt_text_zh
+    assert "委员会系统提示词" in chair_system.prompt_text_zh
 
     rendered = await service.render_prompt(
         "trading_committee.repair.user",
@@ -175,7 +173,7 @@ async def test_seeded_committee_prompt_templates_are_loadable_and_renderable() -
     )
 
     assert rendered.prompt_key == "trading_committee.repair.user"
-    assert rendered.version == DEFAULT_COMMITTEE_PROMPT_VERSION
+    assert rendered.version == "1.0.0"
     assert rendered.runtime_text_en.startswith("Validation errors:")
     assert "missing target zone" in rendered.runtime_text_en
     assert rendered.maintenance_text_zh.startswith("验证错误：")

@@ -6,6 +6,7 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 from goldfxgraph.market_data.tradingview_history import TradingViewHistoryError, fetch_gold_daily_bars
+from goldfxgraph.persistence.external_source_registry import ExternalSourceRegistryService
 from goldfxgraph.persistence.repositories import ForecastRepository
 
 
@@ -69,7 +70,10 @@ async def run_eod_backfill(
         )
 
     try:
+        source_service = ExternalSourceRegistryService(repository._session_factory)  # type: ignore[attr-defined]
+        tradingview_history_source = await source_service.get_active_source("tradingview.history")
         appended_bars = fetch_gold_daily_bars(
+            source=tradingview_history_source,
             start_date=missing_dates[0],
             end_date=missing_dates[-1],
         )

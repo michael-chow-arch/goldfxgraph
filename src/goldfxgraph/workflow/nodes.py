@@ -12,8 +12,8 @@ import httpx
 from pydantic import BaseModel, Field
 
 from goldfxgraph.indicators.technical import compute_technical_indicators
-from goldfxgraph.llm.openai_client import OpenAIAgentClient, OpenAIClientError
-from goldfxgraph.market_data.current_quote import CurrentQuoteProvider, QuoteProviderError
+from goldfxgraph.llm.openai_client import OpenAIAgentClient, OpenAIAgentResult, OpenAIClientError
+from goldfxgraph.market_data.current_quote import QuoteProviderError
 from goldfxgraph.market_data.external_signals import (
     ExternalSignalError,
     fetch_cftc_gold_commitments,
@@ -22,14 +22,16 @@ from goldfxgraph.market_data.external_signals import (
 )
 from goldfxgraph.market_data.newsflow import (
     NewsflowError,
+    NEWSFLOW_SOURCE_KEYS,
     fetch_newsflow,
     translate_headline_to_chinese,
     translate_source_name_to_chinese,
 )
 from goldfxgraph.market_data.pizza_index import PizzaIndexError, fetch_pizza_index
 from goldfxgraph.market_data.polymarket import PolymarketError, fetch_polymarket_inputs
-from goldfxgraph.market_data.tradingview_quote import DEFAULT_TRADINGVIEW_SOURCE
+from goldfxgraph.market_data.tradingview_quote import TradingViewQuoteProvider
 from goldfxgraph.packages.common.settings import GoldFXGraphSettings, get_settings
+from goldfxgraph.persistence.external_source_registry import ExternalSourceRegistryService
 from goldfxgraph.persistence.prompt_registry import PromptTemplateService, RenderedPrompt
 from goldfxgraph.persistence.repositories import ForecastRepository
 from goldfxgraph.schemas.forecast import (
@@ -260,7 +262,7 @@ async def tool_load_forecast_feedback_history(state: WorkflowState) -> WorkflowS
     return {"forecast_feedback_history": history}
 
 
-def tool_fetch_market_sentiment_inputs(state: WorkflowState) -> WorkflowState:
+async def tool_fetch_market_sentiment_inputs(state: WorkflowState) -> WorkflowState:
     _schedule_scheduler_status_update(state, current_stage="tool_fetch_market_sentiment_inputs")
     latest_bar = _required(state, "latest_bar")
     quote = _required(state, "quote")
@@ -269,7 +271,9 @@ def tool_fetch_market_sentiment_inputs(state: WorkflowState) -> WorkflowState:
     signal_transport = state.get("signal_http_transport")
 
     trend_bias = _direction_from_inputs(quote.current_price, latest_bar, indicators)
-    cftc_commitments, _ = _fetch_cftc_commitments(signal_transport)
+    source_service = _external_source_registry_service(state)
+    sources = await source_service.get_active_sources(["macro.cftc.gold_commitments"])
+    cftc_commitments, _ = _fetch_cftc_commitments(sources["macro.cftc.gold_commitments"], signal_transport)
     newsflow_inputs = state.get("newsflow_inputs") or {}
     polymarket_inputs = state.get("polymarket_inputs") or {}
     unavailable_signals = list(state.get("unavailable_signals") or [])
@@ -320,14 +324,21 @@ def tool_fetch_market_sentiment_inputs(state: WorkflowState) -> WorkflowState:
     }
 
 
-def tool_fetch_alt_data_inputs(state: WorkflowState) -> WorkflowState:
+async def tool_fetch_alt_data_inputs(state: WorkflowState) -> WorkflowState:
     _schedule_scheduler_status_update(state, current_stage="tool_fetch_alt_data_inputs")
     latest_bar = _required(state, "latest_bar")
     quote = _required(state, "quote")
     signal_transport = state.get("signal_http_transport")
     pizza_index = state.get("pizza_index_inputs") or {}
-    dollar_index, _ = _fetch_dollar_index(signal_transport)
-    real_rates, _ = _fetch_real_rates(signal_transport)
+    source_service = _external_source_registry_service(state)
+    sources = await source_service.get_active_sources(
+        [
+            "macro.fred.dollar_index",
+            "macro.fred.real_rates",
+        ]
+    )
+    dollar_index, _ = _fetch_dollar_index(sources["macro.fred.dollar_index"], signal_transport)
+    real_rates, _ = _fetch_real_rates(sources["macro.fred.real_rates"], signal_transport)
     unavailable_signals = list(state.get("unavailable_signals") or [])
     if pizza_index.get("status") != "available":
         unavailable_signals.append("pizza_index")
@@ -370,11 +381,16 @@ def tool_fetch_alt_data_inputs(state: WorkflowState) -> WorkflowState:
     }
 
 
-def tool_fetch_newsflow_inputs(state: WorkflowState) -> WorkflowState:
+async def tool_fetch_newsflow_inputs(state: WorkflowState) -> WorkflowState:
     _schedule_scheduler_status_update(state, current_stage="tool_fetch_newsflow_inputs")
     signal_transport = state.get("signal_http_transport")
     try:
-        newsflow_inputs = fetch_newsflow(signal_transport)
+        source_service = _external_source_registry_service(state)
+        sources = await source_service.get_active_sources(list(NEWSFLOW_SOURCE_KEYS))
+        newsflow_inputs = fetch_newsflow(
+            tuple(sources[source_key] for source_key in NEWSFLOW_SOURCE_KEYS),
+            signal_transport,
+        )
     except (NewsflowError, httpx.HTTPError, ValueError, TypeError) as exc:
         newsflow_inputs = {
             "status": "unavailable",
@@ -400,16 +416,18 @@ def tool_fetch_newsflow_inputs(state: WorkflowState) -> WorkflowState:
     }
 
 
-def tool_fetch_pizza_index_inputs(state: WorkflowState) -> WorkflowState:
+async def tool_fetch_pizza_index_inputs(state: WorkflowState) -> WorkflowState:
     _schedule_scheduler_status_update(state, current_stage="tool_fetch_pizza_index_inputs")
     signal_transport = state.get("signal_http_transport")
     try:
-        pizza_index_inputs = fetch_pizza_index(signal_transport)
+        source_service = _external_source_registry_service(state)
+        pizza_index_source = await source_service.get_active_source("alt.pizzint.watch")
+        pizza_index_inputs = fetch_pizza_index(pizza_index_source, signal_transport)
     except (PizzaIndexError, httpx.HTTPError, ValueError, TypeError) as exc:
         pizza_index_inputs = {
             "status": "unavailable",
             "source": "pizzint.watch",
-            "url": "https://www.pizzint.watch/",
+            "url": "unavailable",
             "doughcon_level": None,
             "doughcon_label": None,
             "doughcon_description": None,
@@ -433,16 +451,18 @@ def tool_fetch_pizza_index_inputs(state: WorkflowState) -> WorkflowState:
     }
 
 
-def tool_fetch_polymarket_inputs(state: WorkflowState) -> WorkflowState:
+async def tool_fetch_polymarket_inputs(state: WorkflowState) -> WorkflowState:
     _schedule_scheduler_status_update(state, current_stage="tool_fetch_polymarket_inputs")
     signal_transport = state.get("signal_http_transport")
     try:
-        polymarket_inputs = fetch_polymarket_inputs(signal_transport)
+        source_service = _external_source_registry_service(state)
+        polymarket_source = await source_service.get_active_source("alt.polymarket.zh")
+        polymarket_inputs = fetch_polymarket_inputs(polymarket_source, signal_transport)
     except (PolymarketError, httpx.HTTPError, ValueError, TypeError) as exc:
         polymarket_inputs = {
             "status": "unavailable",
             "source": "polymarket.com",
-            "url": "https://polymarket.com/zh",
+            "url": "unavailable",
             "market_count": 0,
             "gold_related_market_count": 0,
             "bullish_count": 0,
@@ -463,14 +483,14 @@ def tool_fetch_polymarket_inputs(state: WorkflowState) -> WorkflowState:
     }
 
 
-def agent_market_sentiment_analysis(state: WorkflowState) -> WorkflowState:
+async def agent_market_sentiment_analysis(state: WorkflowState) -> WorkflowState:
     _schedule_scheduler_status_update(
         state,
         current_stage="agent_market_sentiment_analysis",
         active_agent="market_sentiment",
     )
     inputs = state.get("market_sentiment_inputs", {})
-    remote, _diagnostic, diagnostic_record = _remote_agent_response(
+    remote, _diagnostic, diagnostic_record = await _remote_agent_response(
         state,
         "market_sentiment",
         "agent_market_sentiment_analysis",
@@ -501,13 +521,17 @@ def agent_market_sentiment_analysis(state: WorkflowState) -> WorkflowState:
     }
 
 
-def agent_alt_data_analysis(state: WorkflowState) -> WorkflowState:
+async def agent_alt_data_analysis(state: WorkflowState) -> WorkflowState:
     _schedule_scheduler_status_update(
         state,
         current_stage="agent_alt_data_analysis",
         active_agent="alt_data",
     )
-    remote, _diagnostic, diagnostic_record = _remote_agent_response(state, "alt_data", "agent_alt_data_analysis")
+    remote, _diagnostic, diagnostic_record = await _remote_agent_response(
+        state,
+        "alt_data",
+        "agent_alt_data_analysis",
+    )
     diagnostics = _append_agent_diagnostic(state, diagnostic_record)
     if remote is None:
         summary = _failure_summary("alt_data", diagnostic_record.get("message") if diagnostic_record else None)
@@ -792,16 +816,18 @@ async def tool_ensure_market_data_freshness(state: WorkflowState) -> WorkflowSta
     return {}
 
 
-def tool_fetch_current_gold_quote(state: WorkflowState) -> WorkflowState:
+async def tool_fetch_current_gold_quote(state: WorkflowState) -> WorkflowState:
     _schedule_scheduler_status_update(state, current_stage="tool_fetch_current_gold_quote")
     if "quote" in state:
         return {}
 
     provider = state.get("quote_provider")
     if provider is None:
-        settings = state.get("settings") or get_settings()
-        provider = CurrentQuoteProvider(
-            url=settings.current_quote_url,
+        source_service = _external_source_registry_service(state)
+        quote_source = await source_service.get_active_source("tradingview.current_quote")
+        provider = TradingViewQuoteProvider(
+            source=quote_source,
+            transport=state.get("signal_http_transport"),
         )
 
     quote = provider.fetch()
@@ -810,10 +836,10 @@ def tool_fetch_current_gold_quote(state: WorkflowState) -> WorkflowState:
 
 
 def _require_tradingview_quote(quote: CurrentQuote) -> CurrentQuote:
-    if quote.data_source.strip().lower() != DEFAULT_TRADINGVIEW_SOURCE.lower():
+    if quote.data_source.strip().lower() != "tradingview":
         raise QuoteProviderError("TradingView quote provider returned a non-TradingView data source")
-    if quote.data_source != DEFAULT_TRADINGVIEW_SOURCE:
-        quote = quote.model_copy(update={"data_source": DEFAULT_TRADINGVIEW_SOURCE})
+    if quote.data_source != "TradingView":
+        quote = quote.model_copy(update={"data_source": "TradingView"})
     return quote
 
 
@@ -832,14 +858,21 @@ def tool_compute_indicators(state: WorkflowState) -> WorkflowState:
     return {"indicators": compute_technical_indicators(bars)}
 
 
-def tool_fetch_macro_inputs(state: WorkflowState) -> WorkflowState:
+async def tool_fetch_macro_inputs(state: WorkflowState) -> WorkflowState:
     _schedule_scheduler_status_update(state, current_stage="tool_fetch_macro_inputs")
     latest_bar = _required(state, "latest_bar")
     quote = _required(state, "quote")
     indicators = _required(state, "indicators")
     signal_transport = state.get("signal_http_transport")
-    dollar_index, _ = _fetch_dollar_index(signal_transport)
-    real_rates, _ = _fetch_real_rates(signal_transport)
+    source_service = _external_source_registry_service(state)
+    sources = await source_service.get_active_sources(
+        [
+            "macro.fred.dollar_index",
+            "macro.fred.real_rates",
+        ]
+    )
+    dollar_index, _ = _fetch_dollar_index(sources["macro.fred.dollar_index"], signal_transport)
+    real_rates, _ = _fetch_real_rates(sources["macro.fred.real_rates"], signal_transport)
     unavailable_signals = list(state.get("unavailable_signals") or [])
     if dollar_index.get("status") != "available":
         unavailable_signals.append("dollar_index")
@@ -867,7 +900,7 @@ def tool_fetch_macro_inputs(state: WorkflowState) -> WorkflowState:
     }
 
 
-def agent_technical_analysis(state: WorkflowState) -> WorkflowState:
+async def agent_technical_analysis(state: WorkflowState) -> WorkflowState:
     _schedule_scheduler_status_update(
         state,
         current_stage="agent_technical_analysis",
@@ -876,7 +909,7 @@ def agent_technical_analysis(state: WorkflowState) -> WorkflowState:
     latest_bar = _required(state, "latest_bar")
     quote = _required(state, "quote")
     indicators = _required(state, "indicators")
-    remote, _diagnostic, diagnostic_record = _remote_agent_response(
+    remote, _diagnostic, diagnostic_record = await _remote_agent_response(
         state,
         "technical",
         "agent_technical_analysis",
@@ -909,13 +942,17 @@ def agent_technical_analysis(state: WorkflowState) -> WorkflowState:
     }
 
 
-def agent_macro_analysis(state: WorkflowState) -> WorkflowState:
+async def agent_macro_analysis(state: WorkflowState) -> WorkflowState:
     _schedule_scheduler_status_update(
         state,
         current_stage="agent_macro_analysis",
         active_agent="macro",
     )
-    remote, _diagnostic, diagnostic_record = _remote_agent_response(state, "macro", "agent_macro_analysis")
+    remote, _diagnostic, diagnostic_record = await _remote_agent_response(
+        state,
+        "macro",
+        "agent_macro_analysis",
+    )
     diagnostics = _append_agent_diagnostic(state, diagnostic_record)
     if remote is None:
         summary = _failure_summary("macro", diagnostic_record.get("message") if diagnostic_record else None)
@@ -938,13 +975,17 @@ def agent_macro_analysis(state: WorkflowState) -> WorkflowState:
     }
 
 
-def agent_news_analysis(state: WorkflowState) -> WorkflowState:
+async def agent_news_analysis(state: WorkflowState) -> WorkflowState:
     _schedule_scheduler_status_update(
         state,
         current_stage="agent_news_analysis",
         active_agent="news",
     )
-    remote, _diagnostic, diagnostic_record = _remote_agent_response(state, "news", "agent_news_analysis")
+    remote, _diagnostic, diagnostic_record = await _remote_agent_response(
+        state,
+        "news",
+        "agent_news_analysis",
+    )
     diagnostics = _append_agent_diagnostic(state, diagnostic_record)
     inputs = state.get("newsflow_inputs", {})
     reference_summary = _news_summary(inputs)
@@ -972,7 +1013,7 @@ def agent_news_analysis(state: WorkflowState) -> WorkflowState:
     }
 
 
-def agent_risk_analysis(state: WorkflowState) -> WorkflowState:
+async def agent_risk_analysis(state: WorkflowState) -> WorkflowState:
     _schedule_scheduler_status_update(
         state,
         current_stage="agent_risk_analysis",
@@ -982,7 +1023,11 @@ def agent_risk_analysis(state: WorkflowState) -> WorkflowState:
     quote = _required(state, "quote")
     indicators = _required(state, "indicators")
     atr = _usable_atr(indicators, latest_bar, quote.current_price)
-    remote, _diagnostic, diagnostic_record = _remote_agent_response(state, "risk", "agent_risk_analysis")
+    remote, _diagnostic, diagnostic_record = await _remote_agent_response(
+        state,
+        "risk",
+        "agent_risk_analysis",
+    )
     diagnostics = _append_agent_diagnostic(state, diagnostic_record)
     notes = _merge_notes(
         state.get("risk_notes"),
@@ -1628,6 +1673,40 @@ async def _record_committee_prompt_versions(
     rendered_system = await service.render_prompt(system_key, variables)
     rendered_user = await service.render_prompt(user_key, variables)
     return _append_committee_prompt_versions(state, [rendered_system, rendered_user])
+
+
+async def _render_analysis_agent_messages(
+    state: WorkflowState,
+    agent_name: str,
+    payload: dict[str, Any],
+) -> list[dict[str, str]]:
+    repository = state.get("repository")
+    if repository is None:
+        raise ValueError("workflow repository is required for prompt registry access")
+
+    service = PromptTemplateService(repository._session_factory)  # type: ignore[attr-defined]
+    system_prompt = await service.render_prompt(
+        "analysis.generic.system",
+        {"agent_name": agent_name},
+    )
+    user_prompt = await service.render_prompt(
+        "analysis.generic.user",
+        {
+            "agent_name": agent_name,
+            "payload_json": json.dumps(payload, ensure_ascii=False, sort_keys=True),
+        },
+    )
+    return [
+        {"role": "system", "content": system_prompt.runtime_text_en},
+        {"role": "user", "content": user_prompt.runtime_text_en},
+    ]
+
+
+def _external_source_registry_service(state: WorkflowState) -> ExternalSourceRegistryService:
+    repository = state.get("repository")
+    if repository is None:
+        raise ValueError("workflow repository is required for external source registry access")
+    return ExternalSourceRegistryService(repository._session_factory)  # type: ignore[attr-defined]
 
 
 def _committee_supporting_items(evidence_package: EvidencePackage, side: DebateSide) -> list[EvidencePackageItem]:
@@ -2682,19 +2761,15 @@ def _existing_votes_without(state: WorkflowState, agent_name: str) -> list[Agent
     return [vote for vote in state.get("agent_votes", []) if vote.agent != agent_name]
 
 
-def _remote_agent_response(
+async def _remote_agent_response(
     state: WorkflowState,
     agent_name: str,
     stage: str,
 ) -> tuple[AgentApiResponse | None, str | None, dict[str, Any] | None]:
-    settings = state.get("settings") or get_settings()
-    if not settings.openai_base_url or not settings.openai_model or not settings.openai_api_key:
-        message = (
-            f"OpenAI-compatible {agent_name} agent 未配置有效 base_url/model/API Key，"
-            "已标记为失败，不生成兜底输出。"
-        )
-        detail = _settings_snapshot_for_agent(settings)
-        logger.warning("%s detail=%s", message, detail)
+    repository = state.get("repository")
+    if repository is None:
+        message = f"OpenAI-compatible {agent_name} agent 缺少 repository，已标记为失败，不生成兜底输出。"
+        logger.warning("%s", message)
         return (
             None,
             message,
@@ -2703,20 +2778,76 @@ def _remote_agent_response(
                 stage=stage,
                 status="unconfigured",
                 message=message,
-                detail=detail,
+                detail="repository missing",
             ),
         )
 
     # 只发送可验证的市场/指标上下文，不把 secret 或 settings 放进 payload。
     payload = _agent_payload(state, agent_name)
+    try:
+        messages = await _render_analysis_agent_messages(state, agent_name, payload)
+    except Exception as exc:  # noqa: BLE001
+        detail = str(exc).strip() or "prompt registry error"
+        message = f"OpenAI-compatible {agent_name} agent prompt registry 读取失败，已标记为失败，不生成兜底输出。"
+        logger.warning("%s detail=%s", message, detail)
+        return (
+            None,
+            message,
+            _agent_diagnostic_record(
+                agent=agent_name,
+                stage=stage,
+                status="prompt_unavailable",
+                message=message,
+                detail=detail,
+            ),
+        )
+
+    try:
+        source_service = ExternalSourceRegistryService(repository._session_factory)  # type: ignore[attr-defined]
+        llm_source = await source_service.get_active_source("llm.openai.analysis")
+    except Exception as exc:  # noqa: BLE001
+        detail = str(exc).strip() or "llm source registry error"
+        message = f"OpenAI-compatible {agent_name} agent LLM 连接配置读取失败，已标记为失败，不生成兜底输出。"
+        logger.warning("%s detail=%s", message, detail)
+        return (
+            None,
+            message,
+            _agent_diagnostic_record(
+                agent=agent_name,
+                stage=stage,
+                status="llm_unavailable",
+                message=message,
+                detail=detail,
+            ),
+        )
+
+    if llm_source.model is None or llm_source.api_key is None:
+        message = f"OpenAI-compatible {agent_name} agent LLM 配置缺少 model 或 api_key，已标记为失败，不生成兜底输出。"
+        logger.warning("%s", message)
+        return (
+            None,
+            message,
+            _agent_diagnostic_record(
+                agent=agent_name,
+                stage=stage,
+                status="llm_unconfigured",
+                message=message,
+                detail="model or api_key missing",
+            ),
+        )
+
     transport = state.get("agent_http_transport")
     try:
         result = OpenAIAgentClient(
-            base_url=settings.openai_base_url,
-            model=settings.openai_model,
-            api_key=settings.openai_api_key.get_secret_value(),
+            base_url=llm_source.endpoint_url,
+            model=llm_source.model,
+            api_key=llm_source.api_key,
             transport=transport,
-        ).invoke_agent(agent_name, payload)
+        ).invoke_messages(
+            agent_name=agent_name,
+            messages=messages,
+            output_model=OpenAIAgentResult,
+        )
     except OpenAIClientError as exc:
         detail = str(exc).strip() or "agent call failed"
         message = f"OpenAI-compatible {agent_name} agent 调用失败，已标记为失败，不生成兜底输出。"
@@ -2752,13 +2883,6 @@ def _remote_agent_response(
         )
 
     return validated.model_copy(update={"summary": cleaned_summary}), None, None
-
-
-def _settings_snapshot_for_agent(settings: GoldFXGraphSettings) -> str:
-    base_url = settings.openai_base_url or "unset"
-    model = settings.openai_model or "unset"
-    api_key = "set" if settings.openai_api_key is not None else "unset"
-    return f"base_url={base_url}; model={model}; api_key={api_key}"
 
 
 def _agent_diagnostic_record(
@@ -3175,9 +3299,12 @@ def _external_source_status(signals: list[dict[str, object]]) -> str:
     return "unavailable"
 
 
-def _fetch_cftc_commitments(signal_transport: httpx.BaseTransport | None) -> tuple[dict[str, object], str | None]:
+def _fetch_cftc_commitments(
+    source: ExternalSourceSnapshot,
+    signal_transport: httpx.BaseTransport | None,
+) -> tuple[dict[str, object], str | None]:
     try:
-        return fetch_cftc_gold_commitments(signal_transport), None
+        return fetch_cftc_gold_commitments(source, signal_transport), None
     except (ExternalSignalError, httpx.HTTPError, ValueError, TypeError) as exc:
         return {
             "status": "unavailable",
@@ -3188,9 +3315,12 @@ def _fetch_cftc_commitments(signal_transport: httpx.BaseTransport | None) -> tup
         }, f"CFTC 黄金持仓源不可用：{exc}"
 
 
-def _fetch_dollar_index(signal_transport: httpx.BaseTransport | None) -> tuple[dict[str, object], str | None]:
+def _fetch_dollar_index(
+    source: ExternalSourceSnapshot,
+    signal_transport: httpx.BaseTransport | None,
+) -> tuple[dict[str, object], str | None]:
     try:
-        return fetch_dollar_index(signal_transport), None
+        return fetch_dollar_index(source, signal_transport), None
     except (ExternalSignalError, httpx.HTTPError, ValueError, TypeError) as exc:
         return {
             "status": "unavailable",
@@ -3201,9 +3331,12 @@ def _fetch_dollar_index(signal_transport: httpx.BaseTransport | None) -> tuple[d
         }, f"美元指数源不可用：{exc}"
 
 
-def _fetch_real_rates(signal_transport: httpx.BaseTransport | None) -> tuple[dict[str, object], str | None]:
+def _fetch_real_rates(
+    source: ExternalSourceSnapshot,
+    signal_transport: httpx.BaseTransport | None,
+) -> tuple[dict[str, object], str | None]:
     try:
-        return fetch_real_rates(signal_transport), None
+        return fetch_real_rates(source, signal_transport), None
     except (ExternalSignalError, httpx.HTTPError, ValueError, TypeError) as exc:
         return {
             "status": "unavailable",

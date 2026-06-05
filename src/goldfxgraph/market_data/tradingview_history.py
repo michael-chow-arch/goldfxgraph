@@ -7,24 +7,16 @@ from collections import defaultdict
 from datetime import UTC, date, datetime, time, timedelta
 from math import isfinite
 from typing import Any
-from urllib.parse import quote
-
 import certifi
 import httpx
 from pydantic import ValidationError
 from websockets.sync.client import connect
 
+from goldfxgraph.persistence.external_source_registry import ExternalSourceSnapshot
 from goldfxgraph.schemas.forecast import DailyBar
 
-TRADINGVIEW_HISTORY_HTTP_URL = "https://www.tradingview.com/history"
-TRADINGVIEW_CHART_WS_URL = "wss://data.tradingview.com/socket.io/websocket"
-TRADINGVIEW_HISTORY_SOURCE = "TradingView"
 TRADINGVIEW_GOLD_SYMBOL = "XAUUSD"
-TRADINGVIEW_CHART_SYMBOL = "OANDA:XAUUSD"
-TRADINGVIEW_CHART_TIMEZONE = "Etc/UTC"
-TRADINGVIEW_CHART_ORIGIN = "https://www.tradingview.com"
-TRADINGVIEW_CHART_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) GoldFXGraph/1.0"
-TRADINGVIEW_AUTH_TOKEN = "unauthorized_user_token"
+TRADINGVIEW_HISTORY_SOURCE = "TradingView"
 TRADINGVIEW_CHART_SERIES_ID = "s1"
 TRADINGVIEW_CHART_SYMBOL_ALIAS = "symbol_1"
 
@@ -35,6 +27,7 @@ class TradingViewHistoryError(RuntimeError):
 
 def fetch_gold_daily_bars(
     *,
+    source: ExternalSourceSnapshot,
     start_date: date,
     end_date: date,
     transport: httpx.BaseTransport | None = None,
@@ -44,16 +37,18 @@ def fetch_gold_daily_bars(
 
     if transport is not None:
         return _fetch_gold_daily_bars_via_http_mock(
+            source=source,
             start_date=start_date,
             end_date=end_date,
             transport=transport,
         )
 
-    return _fetch_gold_daily_bars_via_chart_websocket(start_date=start_date, end_date=end_date)
+    return _fetch_gold_daily_bars_via_chart_websocket(source=source, start_date=start_date, end_date=end_date)
 
 
 def _fetch_gold_daily_bars_via_http_mock(
     *,
+    source: ExternalSourceSnapshot,
     start_date: date,
     end_date: date,
     transport: httpx.BaseTransport,
@@ -61,16 +56,16 @@ def _fetch_gold_daily_bars_via_http_mock(
     period1 = int(datetime.combine(start_date, time.min, tzinfo=UTC).timestamp())
     period2 = int(datetime.combine(end_date + timedelta(days=1), time.min, tzinfo=UTC).timestamp())
     params = {
-        "symbol": TRADINGVIEW_GOLD_SYMBOL,
+        "symbol": _require_request_config_value(source, "symbol"),
         "resolution": "D",
         "from": period1,
         "to": period2,
     }
-    headers = {"User-Agent": TRADINGVIEW_CHART_USER_AGENT, "Accept": "application/json"}
+    headers = {"User-Agent": _require_request_config_value(source, "user_agent"), "Accept": "application/json"}
 
     try:
         with httpx.Client(transport=transport, timeout=20) as client:
-            response = client.get(TRADINGVIEW_HISTORY_HTTP_URL, params=params, headers=headers)
+            response = client.get(_require_request_config_value(source, "http_url"), params=params, headers=headers)
             response.raise_for_status()
     except httpx.HTTPError as exc:
         raise TradingViewHistoryError("TradingView history request failed") from exc
@@ -85,10 +80,15 @@ def _fetch_gold_daily_bars_via_http_mock(
     return bars
 
 
-def _fetch_gold_daily_bars_via_chart_websocket(*, start_date: date, end_date: date) -> list[DailyBar]:
+def _fetch_gold_daily_bars_via_chart_websocket(
+    *,
+    source: ExternalSourceSnapshot,
+    start_date: date,
+    end_date: date,
+) -> list[DailyBar]:
     requested_count = _requested_bar_count(start_date=start_date, end_date=end_date)
-    session_id = _random_session_id("cs_")
-    ws_url = _build_chart_ws_url()
+    session_id = _random_session_id(_require_request_config_value(source, "session_prefix"))
+    ws_url = _build_chart_ws_url(source)
 
     ssl_context = ssl.create_default_context(cafile=certifi.where())
     bars_by_date: dict[date, DailyBar] = {}
@@ -97,8 +97,8 @@ def _fetch_gold_daily_bars_via_chart_websocket(*, start_date: date, end_date: da
     try:
         with connect(
             ws_url,
-            origin=TRADINGVIEW_CHART_ORIGIN,
-            user_agent_header=TRADINGVIEW_CHART_USER_AGENT,
+            origin=_require_request_config_value(source, "origin"),
+            user_agent_header=_require_request_config_value(source, "user_agent"),
             ssl=ssl_context,
             proxy=None,
             open_timeout=15,
@@ -106,12 +106,12 @@ def _fetch_gold_daily_bars_via_chart_websocket(*, start_date: date, end_date: da
             ping_timeout=20,
             max_size=20 * 1024 * 1024,
         ) as ws:
-            _send_chart_message(ws, "set_auth_token", [TRADINGVIEW_AUTH_TOKEN])
+            _send_chart_message(ws, "set_auth_token", [_require_request_config_value(source, "auth_token")])
             _send_chart_message(ws, "chart_create_session", [session_id, ""])
             _send_chart_message(
                 ws,
                 "resolve_symbol",
-                [session_id, TRADINGVIEW_CHART_SYMBOL_ALIAS, _resolve_symbol_payload()],
+                [session_id, _require_request_config_value(source, "chart_symbol_alias"), _resolve_symbol_payload(source)],
             )
             _send_chart_message(
                 ws,
@@ -120,12 +120,12 @@ def _fetch_gold_daily_bars_via_chart_websocket(*, start_date: date, end_date: da
                     session_id,
                     TRADINGVIEW_CHART_SERIES_ID,
                     TRADINGVIEW_CHART_SERIES_ID,
-                    TRADINGVIEW_CHART_SYMBOL_ALIAS,
+                    _require_request_config_value(source, "chart_symbol_alias"),
                     "D",
                     requested_count,
                 ],
             )
-            _send_chart_message(ws, "switch_timezone", [session_id, TRADINGVIEW_CHART_TIMEZONE])
+            _send_chart_message(ws, "switch_timezone", [session_id, _require_request_config_value(source, "chart_timezone")])
 
             while True:
                 try:
@@ -179,9 +179,12 @@ def _fetch_gold_daily_bars_via_chart_websocket(*, start_date: date, end_date: da
     return bars
 
 
-def _build_chart_ws_url() -> str:
+def _build_chart_ws_url(source: ExternalSourceSnapshot) -> str:
+    base_url = _require_request_config_value(source, "ws_url")
+    session_prefix = _require_request_config_value(source, "session_path")
     session_suffix = datetime.now(UTC).strftime("%Y_%m_%d-%H_%M")
-    return f"{TRADINGVIEW_CHART_WS_URL}?from={quote('chart/goldfxgraph/', safe='')}&date={session_suffix}"
+    query = f"from={session_prefix}&date={session_suffix}"
+    return f"{base_url}?{query}"
 
 
 def _requested_bar_count(*, start_date: date, end_date: date) -> int:
@@ -189,8 +192,17 @@ def _requested_bar_count(*, start_date: date, end_date: date) -> int:
     return max(50, min(1000, span_days * 8 + 50))
 
 
-def _resolve_symbol_payload() -> str:
-    return '={"symbol":"OANDA:XAUUSD","adjustment":"splits"}'
+def _resolve_symbol_payload(source: ExternalSourceSnapshot) -> str:
+    symbol = _require_request_config_value(source, "chart_symbol")
+    return f'={{"symbol":"{symbol}","adjustment":"splits"}}'
+
+
+def _require_request_config_value(source: ExternalSourceSnapshot, key: str) -> str:
+    value = source.request_config.get(key)
+    rendered = str(value or "").strip()
+    if not rendered:
+        raise TradingViewHistoryError(f"TradingView history source is missing required config: {key}")
+    return rendered
 
 
 def _random_session_id(prefix: str) -> str:

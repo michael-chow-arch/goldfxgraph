@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from json import JSONDecodeError
+from collections.abc import Sequence
 from typing import Any, TypeVar
 
 import httpx
@@ -37,49 +38,14 @@ class OpenAIAgentClient:
         self._api_key = api_key
         self._transport = transport
 
-    def invoke_agent(self, agent_name: str, payload: dict[str, Any]) -> OpenAIAgentResult:
-        system_prompt = (
-            "你是 GoldFXGraph 的分析 agent，名称为 "
-            f"{agent_name}。请只返回一个 JSON object，"
-            "字段必须包含 summary、direction、confidence、risk_notes。"
-            "所有自然语言字段必须使用简体中文，"
-            "如果 payload 中存在 title_cn、source_cn、summary_cn 等中文翻译字段，必须优先使用，"
-            "尤其在 news 与 market_sentiment 场景中不得直接输出英文新闻标题或英文市场标题作为摘要主体，"
-            "如果 payload 中包含 newsflow_inputs 或 polymarket_inputs，请优先引用其中的中文标题、"
-            "中文来源与中文摘要，"
-            "direction 只能使用 bullish、bearish、neutral。"
-            "risk_notes 必须是字符串数组。"
-        )
-        user_prompt = json.dumps(
-            {
-                "agent_name": agent_name,
-                "payload": payload,
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-        )
-        return self.invoke_prompted_model(
-            agent_name=agent_name,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            output_model=OpenAIAgentResult,
-        )
-
-    def invoke_prompted_model(
+    def invoke_messages(
         self,
         *,
         agent_name: str,
-        system_prompt: str,
-        user_prompt: str,
+        messages: Sequence[dict[str, str]],
         output_model: type[TStructuredModel],
     ) -> TStructuredModel:
-        data = self._post_chat_completions(
-            agent_name,
-            [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-        )
+        data = self._post_chat_completions(agent_name, list(messages))
         content = self._extract_message_content(data, agent_name)
         structured_payload = self._parse_content_json(content, agent_name)
         if output_model is OpenAIAgentResult:

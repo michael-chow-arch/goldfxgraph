@@ -10,7 +10,8 @@ from urllib.parse import urljoin
 
 import httpx
 
-POLYMARKET_URL = "https://polymarket.com/zh"
+from goldfxgraph.persistence.external_source_registry import ExternalSourceSnapshot
+
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -112,21 +113,20 @@ class PolymarketMarket:
 
 
 def fetch_polymarket_inputs(
+    source: ExternalSourceSnapshot,
     transport: httpx.BaseTransport | None = None,
-    *,
-    url: str = POLYMARKET_URL,
 ) -> dict[str, Any]:
     headers = {
         "User-Agent": USER_AGENT,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
     with httpx.Client(transport=transport, timeout=20, follow_redirects=True, headers=headers) as client:
-        response = client.get(url)
+        response = client.get(source.endpoint_url)
         response.raise_for_status()
 
     html_text = response.text
-    raw_candidates = _extract_market_candidates(html_text, base_url=url)
-    markets = [_normalize_market(candidate, base_url=url) for candidate in raw_candidates]
+    raw_candidates = _extract_market_candidates(html_text, base_url=source.endpoint_url)
+    markets = [_normalize_market(candidate, base_url=source.endpoint_url) for candidate in raw_candidates]
     markets = [market for market in markets if market.relevance_score > 0]
     markets.sort(key=lambda item: (item.relevance_score, item.probability or 0.0, item.liquidity or 0.0), reverse=True)
 
@@ -157,8 +157,8 @@ def fetch_polymarket_inputs(
 
     return {
         "status": "available",
-        "source": "polymarket.com",
-        "url": url,
+        "source": _source_name(source),
+        "url": source.endpoint_url,
         "market_count": len(raw_candidates),
         "gold_related_market_count": len(markets),
         "bullish_count": bullish_count,
@@ -442,3 +442,9 @@ def translate_polymarket_title_to_chinese(title: str) -> str:
 
 def _clean_text(value: str | None) -> str:
     return html_lib.unescape((value or "").strip())
+
+
+def _source_name(source: ExternalSourceSnapshot) -> str:
+    value = source.request_config.get("source_name")
+    rendered = str(value or "").strip()
+    return rendered or source.source_key

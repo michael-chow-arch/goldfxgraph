@@ -82,6 +82,8 @@ def test_research_cli_reruns_workflow(monkeypatch) -> None:
 
     monkeypatch.setattr(research_cli, "create_session_factory", lambda database_url: _FakeSessionFactory())
     monkeypatch.setattr(research_cli, "init_models", lambda engine: asyncio.sleep(0))
+    monkeypatch.setattr(research_cli, "validate_required_prompt_templates", lambda session_factory: asyncio.sleep(0))
+    monkeypatch.setattr(research_cli, "validate_required_external_sources", lambda session_factory: asyncio.sleep(0))
     monkeypatch.setattr(research_cli, "ForecastRepository", lambda session_factory: fake_repo)
     monkeypatch.setattr(research_cli, "run_forecast_workflow", fake_run_forecast_workflow)
 
@@ -112,6 +114,8 @@ def test_research_cli_fails_when_freshness_preflight_fails(monkeypatch) -> None:
 
     monkeypatch.setattr(research_cli, "create_session_factory", lambda database_url: _FakeSessionFactory())
     monkeypatch.setattr(research_cli, "init_models", lambda engine: asyncio.sleep(0))
+    monkeypatch.setattr(research_cli, "validate_required_prompt_templates", lambda session_factory: asyncio.sleep(0))
+    monkeypatch.setattr(research_cli, "validate_required_external_sources", lambda session_factory: asyncio.sleep(0))
     monkeypatch.setattr(research_cli, "ForecastRepository", lambda session_factory: fake_repo)
     monkeypatch.setattr("goldfxgraph.workflow.nodes.run_eod_backfill", fake_run_eod_backfill)
 
@@ -135,6 +139,8 @@ def test_research_cli_marks_run_failed_when_workflow_fails(monkeypatch) -> None:
 
     monkeypatch.setattr(research_cli, "create_session_factory", lambda database_url: _FakeSessionFactory())
     monkeypatch.setattr(research_cli, "init_models", lambda engine: asyncio.sleep(0))
+    monkeypatch.setattr(research_cli, "validate_required_prompt_templates", lambda session_factory: asyncio.sleep(0))
+    monkeypatch.setattr(research_cli, "validate_required_external_sources", lambda session_factory: asyncio.sleep(0))
     monkeypatch.setattr(research_cli, "ForecastRepository", lambda session_factory: fake_repo)
     monkeypatch.setattr(research_cli, "run_forecast_workflow", fake_run_forecast_workflow)
 

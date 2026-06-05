@@ -258,13 +258,12 @@ def test_frontend_contract_binds_current_api_and_dashboard_fields() -> None:
     assert "direction: ForecastDirection;" in type_source
 
     for snippet in (
-        "委员会证据包",
+        "研究证据包与委员会输入",
         "两轮对抗式辩论",
         "主席仲裁与验证",
-        "Graph Execution Trace",
+        "研究元数据",
+        "本轮 XAUUSD 研究结论",
         "committeeBiasLabel",
-        "committeePromptVersions",
-        "committeeTraceNodes",
         "forecast.value.entry_price_low",
         "forecast.value.entry_price_high",
         "forecast.value.take_profit_price",

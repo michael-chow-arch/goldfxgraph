@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +10,7 @@ from goldfxgraph.market_data.csv_loader import CsvValidationError, load_xauusd_d
 from goldfxgraph.market_data.current_quote import CurrentQuoteProvider, QuoteProviderError
 from goldfxgraph.market_data.ingest import import_xauusd_daily_csv_to_db
 from goldfxgraph.persistence.database import create_session_factory, init_models
+from goldfxgraph.persistence.external_source_registry import ExternalSourceSnapshot
 from goldfxgraph.persistence.repositories import MarketDataRepository
 from goldfxgraph.schemas.forecast import DailyBar
 
@@ -49,6 +50,65 @@ def _socket_frame(payload: str) -> str:
     return f"~m~{len(payload)}~m~{payload}"
 
 
+def _tradingview_source_snapshot() -> ExternalSourceSnapshot:
+    return ExternalSourceSnapshot(
+        id=1,
+        source_key="tradingview.current_quote",
+        source_type="market_data",
+        endpoint_url="https://www.tradingview.com/symbols/XAUUSD/?exchange=FX",
+        request_config={
+            "socket_url": "wss://data.tradingview.com/socket.io/websocket",
+            "socket_from": "symbols/XAUUSD/",
+            "auth": "unauthorized_user_token",
+            "origin": "https://www.tradingview.com",
+            "user_agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "symbol": "FX:XAUUSD",
+            "source_name": "TradingView",
+        },
+        version="1.0.0",
+        is_active=True,
+        description=None,
+        change_notes=None,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+
+
+def _tradingview_history_source_snapshot() -> ExternalSourceSnapshot:
+    return ExternalSourceSnapshot(
+        id=2,
+        source_key="tradingview.history",
+        source_type="market_data",
+        endpoint_url="https://www.tradingview.com/symbols/XAUUSD/?exchange=FX",
+        request_config={
+            "http_url": "https://tvc4.tradingview.com/history",
+            "ws_url": "wss://data.tradingview.com/socket.io/websocket",
+            "origin": "https://www.tradingview.com",
+            "user_agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "auth_token": "unauthorized_user_token",
+            "chart_symbol": "FX:XAUUSD",
+            "chart_symbol_alias": "symbol_1",
+            "chart_timezone": "Etc/UTC",
+            "session_prefix": "cs_",
+            "session_path": "symbols/XAUUSD/",
+            "symbol": "XAUUSD",
+            "source_name": "TradingView",
+        },
+        version="1.0.0",
+        is_active=True,
+        description=None,
+        change_notes=None,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+
+
 def test_load_xauusd_daily_csv_sorts_and_preserves_optional_fields(tmp_path: Path) -> None:
     csv_path = tmp_path / "xauusd.csv"
     csv_path.write_text(
@@ -68,7 +128,7 @@ def test_load_xauusd_daily_csv_sorts_and_preserves_optional_fields(tmp_path: Pat
 
 
 def test_load_repository_csv_fixture() -> None:
-    result = load_xauusd_daily_csv(Path("data/raw/xauusd_d.csv"))
+    result = load_xauusd_daily_csv(Path("data/raw/xauusd_daily.csv"))
 
     assert result.latest_bar.close > 0
     assert result.bars[0].date <= result.latest_bar.date
@@ -173,10 +233,7 @@ def test_current_quote_provider_uses_tradingview_only_and_ignores_legacy_candida
     )
 
     provider = CurrentQuoteProvider(
-        url=None,
-        api_key="token",
-        source_name="legacy-source-name",
-        candidate_urls=["https://legacy-quote.example.test/price/XAU"],
+        source=_tradingview_source_snapshot(),
         socket_factory=socket_factory,
     )
 
@@ -208,7 +265,7 @@ def test_tradingview_quote_provider_parses_quote_websocket_frames() -> None:
         captured,
     )
 
-    provider = TradingViewQuoteProvider(socket_factory=socket_factory)
+    provider = TradingViewQuoteProvider(source=_tradingview_source_snapshot(), socket_factory=socket_factory)
 
     quote = provider.fetch()
 
@@ -227,7 +284,7 @@ def test_tradingview_quote_provider_rejects_missing_lp_time() -> None:
         [_socket_frame('{"m":"qsd","p":["qs_goldfxgraph",{"n":"FX:XAUUSD","s":"ok","v":{"lp":4431.35}}]}')],
         [],
     )
-    provider = TradingViewQuoteProvider(socket_factory=socket_factory)
+    provider = TradingViewQuoteProvider(source=_tradingview_source_snapshot(), socket_factory=socket_factory)
 
     with pytest.raises(QuoteProviderError, match="TradingView quote websocket missing live price or timestamp"):
         provider.fetch()
@@ -237,7 +294,7 @@ def test_tradingview_quote_provider_rejects_malformed_socket_payload() -> None:
     from goldfxgraph.market_data.tradingview_quote import TradingViewQuoteProvider
 
     socket_factory = _build_socket_factory(["not-a-socket-frame"], [])
-    provider = TradingViewQuoteProvider(socket_factory=socket_factory)
+    provider = TradingViewQuoteProvider(source=_tradingview_source_snapshot(), socket_factory=socket_factory)
 
     with pytest.raises(QuoteProviderError, match="TradingView quote websocket missing live price or timestamp"):
         provider.fetch()
@@ -249,7 +306,7 @@ def test_tradingview_quote_provider_raises_on_network_failure() -> None:
     def socket_factory(**kwargs: Any) -> FakeQuoteSocket:
         raise ConnectionError("network down")
 
-    provider = TradingViewQuoteProvider(socket_factory=socket_factory)
+    provider = TradingViewQuoteProvider(source=_tradingview_source_snapshot(), socket_factory=socket_factory)
 
     with pytest.raises(QuoteProviderError, match="TradingView quote request failed"):
         provider.fetch()
@@ -266,9 +323,7 @@ def test_current_quote_provider_ignores_non_tradingview_url_override() -> None:
     )
 
     provider = CurrentQuoteProvider(
-        url="https://not-tradingview.example.test/latest",
-        api_key=None,
-        candidate_urls=["https://legacy-quote.example.test/price/XAU"],
+        source=_tradingview_source_snapshot(),
         socket_factory=socket_factory,
     )
 
@@ -334,6 +389,7 @@ def test_tradingview_history_websocket_disables_proxy_and_parses_daily_bars(monk
     monkeypatch.setattr(tradingview_history, "connect", fake_connect)
 
     bars = tradingview_history.fetch_gold_daily_bars(
+        source=_tradingview_history_source_snapshot(),
         start_date=date(2026, 5, 12),
         end_date=date(2026, 5, 12),
     )

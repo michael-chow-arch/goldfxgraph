@@ -5,6 +5,40 @@ from datetime import UTC, date, datetime, time, timedelta
 import httpx
 import pytest
 
+from goldfxgraph.persistence.external_source_registry import ExternalSourceSnapshot
+
+
+def _tradingview_history_source() -> ExternalSourceSnapshot:
+    return ExternalSourceSnapshot(
+        id=1,
+        source_key="tradingview.history",
+        source_type="market_data",
+        endpoint_url="https://www.tradingview.com/symbols/XAUUSD/?exchange=FX",
+        request_config={
+            "http_url": "https://tvc4.tradingview.com/history",
+            "ws_url": "wss://data.tradingview.com/socket.io/websocket",
+            "origin": "https://www.tradingview.com",
+            "user_agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "auth_token": "unauthorized_user_token",
+            "chart_symbol": "FX:XAUUSD",
+            "chart_symbol_alias": "symbol_1",
+            "chart_timezone": "Etc/UTC",
+            "session_prefix": "cs_",
+            "session_path": "symbols/XAUUSD/",
+            "symbol": "XAUUSD",
+            "source_name": "TradingView",
+        },
+        version="1.0.0",
+        is_active=True,
+        description=None,
+        change_notes=None,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+
 
 def test_fetch_gold_daily_bars_parses_valid_completed_rows_and_skips_invalid_ones() -> None:
     from goldfxgraph.market_data.tradingview_history import fetch_gold_daily_bars
@@ -41,6 +75,7 @@ def test_fetch_gold_daily_bars_parses_valid_completed_rows_and_skips_invalid_one
         return httpx.Response(200, json=payload, request=request)
 
     bars = fetch_gold_daily_bars(
+        source=_tradingview_history_source(),
         start_date=start_date,
         end_date=end_date,
         transport=httpx.MockTransport(handler),
@@ -75,6 +110,7 @@ def test_fetch_gold_daily_bars_rejects_conflicting_dates() -> None:
 
     with pytest.raises(TradingViewHistoryError, match="conflicting daily bars"):
         fetch_gold_daily_bars(
+            source=_tradingview_history_source(),
             start_date=start_date,
             end_date=end_date,
             transport=httpx.MockTransport(handler),
@@ -100,6 +136,7 @@ def test_fetch_gold_daily_bars_skips_unfinished_daily_rows_and_invalid_payload_r
         return httpx.Response(200, json=payload, request=request)
 
     bars = fetch_gold_daily_bars(
+        source=_tradingview_history_source(),
         start_date=start_date,
         end_date=end_date,
         transport=httpx.MockTransport(handler),
@@ -115,6 +152,7 @@ def test_fetch_gold_daily_bars_returns_empty_list_for_no_data() -> None:
         return httpx.Response(200, json={"s": "no_data"}, request=request)
 
     bars = fetch_gold_daily_bars(
+        source=_tradingview_history_source(),
         start_date=date(2024, 1, 2),
         end_date=date(2024, 1, 5),
         transport=httpx.MockTransport(handler),

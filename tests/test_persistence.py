@@ -4,14 +4,17 @@ import pytest
 from sqlalchemy import func, inspect, select
 
 from goldfxgraph.persistence import (
-    DEFAULT_COMMITTEE_PROMPT_KEYS,
-    DEFAULT_COMMITTEE_PROMPT_SEEDS,
     create_session_factory,
     init_models,
-    seed_default_committee_prompt_templates,
+    REQUIRED_PROMPT_KEYS,
 )
 from goldfxgraph.persistence.models import PromptTemplateModel
 from goldfxgraph.persistence.repositories import ForecastRepository
+from goldfxgraph.persistence.seed_external_sources import (
+    REQUIRED_EXTERNAL_SOURCE_KEYS,
+    validate_required_external_sources,
+)
+from goldfxgraph.persistence.seed_prompt_templates import validate_required_prompt_templates
 from goldfxgraph.schemas.forecast import (
     Actionability,
     AgentVote,
@@ -33,6 +36,8 @@ from goldfxgraph.schemas.forecast import (
     LongPlan,
     PromptVersionMetadata,
 )
+
+from conftest import seed_runtime_registry
 
 pytestmark = pytest.mark.asyncio
 
@@ -466,12 +471,14 @@ async def test_init_models_creates_prompt_template_table() -> None:
     assert "is_active" in prompt_columns
 
 
-async def test_seed_default_committee_prompt_templates_is_idempotent() -> None:
+async def test_required_prompt_and_external_source_validation_succeeds_when_seeded() -> None:
     session_factory = create_session_factory("sqlite+aiosqlite:///:memory:")
     await init_models(session_factory.engine)
 
-    written_first = await seed_default_committee_prompt_templates(session_factory)
-    written_second = await seed_default_committee_prompt_templates(session_factory)
+    await seed_runtime_registry(session_factory)
+
+    prompt_count = await validate_required_prompt_templates(session_factory)
+    source_count = await validate_required_external_sources(session_factory)
 
     async with session_factory.sessionmaker() as session:
         total_rows = await session.scalar(select(func.count(PromptTemplateModel.id)))
@@ -495,10 +502,10 @@ async def test_seed_default_committee_prompt_templates_is_idempotent() -> None:
     active_counts = dict(active_counts_result.all())
     prompt_rows = prompt_rows_result.all()
 
-    assert written_first == len(DEFAULT_COMMITTEE_PROMPT_KEYS)
-    assert written_second == len(DEFAULT_COMMITTEE_PROMPT_SEEDS)
-    assert total_rows == len(DEFAULT_COMMITTEE_PROMPT_KEYS)
+    assert prompt_count == len(REQUIRED_PROMPT_KEYS)
+    assert source_count == len(REQUIRED_EXTERNAL_SOURCE_KEYS)
+    assert total_rows == len(REQUIRED_PROMPT_KEYS)
     assert set(active_counts.values()) == {1}
-    assert {row[0] for row in prompt_rows} == set(DEFAULT_COMMITTEE_PROMPT_KEYS)
+    assert {row[0] for row in prompt_rows} == set(REQUIRED_PROMPT_KEYS)
     assert {row[2] for row in prompt_rows} == {"system", "user"}
     assert all(row[3] is True for row in prompt_rows)

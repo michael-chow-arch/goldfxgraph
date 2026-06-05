@@ -5,13 +5,15 @@ from datetime import UTC, date, datetime
 
 import httpx
 
-from goldfxgraph.llm.openai_client import OpenAIAgentClient, OpenAIClientError
+from goldfxgraph.llm.openai_client import OpenAIAgentClient, OpenAIClientError, OpenAIAgentResult
 from goldfxgraph.market_data.current_quote import QuoteProviderError
 from goldfxgraph.packages.common.settings import GoldFXGraphSettings, get_settings
 from goldfxgraph.persistence.repositories import ForecastRepository
 from goldfxgraph.workflow.nodes import (
     WorkflowState,
     _agent_payload,
+    _external_source_registry_service,
+    _render_analysis_agent_messages,
     tool_compute_indicators,
     tool_fetch_alt_data_inputs,
     tool_fetch_current_gold_quote,
@@ -130,17 +132,17 @@ async def _build_probe_state(
     state = _merge_state(state, tool_compute_indicators(state))
     quote_warning = None
     try:
-        state = _merge_state(state, tool_fetch_current_gold_quote(state))
+        state = _merge_state(state, await tool_fetch_current_gold_quote(state))
     except QuoteProviderError as exc:
         quote_warning = str(exc).strip() or "Current quote provider failed"
         state = {**state, "quote_warning": quote_warning}
     else:
-        state = _merge_state(state, tool_fetch_macro_inputs(state))
-        state = _merge_state(state, tool_fetch_newsflow_inputs(state))
-        state = _merge_state(state, tool_fetch_pizza_index_inputs(state))
+        state = _merge_state(state, await tool_fetch_macro_inputs(state))
+        state = _merge_state(state, await tool_fetch_newsflow_inputs(state))
+        state = _merge_state(state, await tool_fetch_pizza_index_inputs(state))
         state = _merge_state(state, await tool_load_forecast_feedback_history(state))
-        state = _merge_state(state, tool_fetch_market_sentiment_inputs(state))
-        state = _merge_state(state, tool_fetch_alt_data_inputs(state))
+        state = _merge_state(state, await tool_fetch_market_sentiment_inputs(state))
+        state = _merge_state(state, await tool_fetch_alt_data_inputs(state))
     if quote_warning:
         state["quote_warning"] = quote_warning
     return state
@@ -159,20 +161,32 @@ async def _probe_agents(
             for agent in AGENT_HEALTH_PROBE_NAMES
         ]
 
-    if not settings.openai_base_url or not settings.openai_model or not settings.openai_api_key:
+    source_service = _external_source_registry_service(state)
+    try:
+        llm_source = await source_service.get_active_source("llm.openai.analysis")
+    except Exception as exc:  # noqa: BLE001
+        error = str(exc).strip() or "未配置有效 LLM 连接"
+        return [AgentHealthProbeResult(agent=agent, ok=False, error=error) for agent in AGENT_HEALTH_PROBE_NAMES]
+
+    if llm_source.model is None or llm_source.api_key is None:
         error = "未配置有效 base_url/model/API Key"
         return [AgentHealthProbeResult(agent=agent, ok=False, error=error) for agent in AGENT_HEALTH_PROBE_NAMES]
 
     client = OpenAIAgentClient(
-        base_url=settings.openai_base_url,
-        model=settings.openai_model,
-        api_key=settings.openai_api_key.get_secret_value(),
+        base_url=llm_source.endpoint_url,
+        model=llm_source.model,
+        api_key=llm_source.api_key,
         transport=agent_http_transport,
     )
     probes: list[AgentHealthProbeResult] = []
     for agent in AGENT_HEALTH_PROBE_NAMES:
         try:
-            result = client.invoke_agent(agent, _agent_payload(state, agent))
+            messages = await _render_analysis_agent_messages(state, agent, _agent_payload(state, agent))
+            result = client.invoke_messages(
+                agent_name=agent,
+                messages=messages,
+                output_model=OpenAIAgentResult,
+            )
         except OpenAIClientError as exc:
             probes.append(AgentHealthProbeResult(agent=agent, ok=False, error=str(exc).strip() or "agent call failed"))
             continue
