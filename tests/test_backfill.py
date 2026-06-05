@@ -51,14 +51,14 @@ async def _repository() -> tuple[SessionFactory, ForecastRepository]:
 async def _seed_tradingview_history_source(session_factory: SessionFactory) -> None:
     async with session_factory.sessionmaker() as session:
         session.add(
-            ExternalSourceModel(
+        ExternalSourceModel(
                 source_key="tradingview.history",
                 source_type="market_data",
-                endpoint_url="https://www.tradingview.com/symbols/XAUUSD/?exchange=FX",
+                endpoint_url="https://example.test/tradingview/symbols/XAUUSD?exchange=FX",
                 request_config={
-                    "http_url": "https://tvc4.tradingview.com/history",
-                    "ws_url": "wss://data.tradingview.com/socket.io/websocket",
-                    "origin": "https://www.tradingview.com",
+                    "http_url": "https://example.test/tradingview/history",
+                    "ws_url": "wss://example.test/tradingview/socket",
+                    "origin": "https://example.test",
                     "user_agent": "Mozilla/5.0",
                     "auth_token": "unauthorized_user_token",
                     "chart_symbol": "FX:XAUUSD",

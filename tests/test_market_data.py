@@ -14,6 +14,10 @@ from goldfxgraph.persistence.external_source_registry import ExternalSourceSnaps
 from goldfxgraph.persistence.repositories import MarketDataRepository
 from goldfxgraph.schemas.forecast import DailyBar
 
+TEST_TRADINGVIEW_BASE_URL = "https://example.test/tradingview"
+TEST_TRADINGVIEW_ORIGIN = "https://example.test"
+TEST_TRADINGVIEW_SOCKET_URL = "wss://example.test/tradingview/socket"
+
 
 class FakeQuoteSocket:
     def __init__(self, frames: list[str | bytes]) -> None:
@@ -55,12 +59,12 @@ def _tradingview_source_snapshot() -> ExternalSourceSnapshot:
         id=1,
         source_key="tradingview.current_quote",
         source_type="market_data",
-        endpoint_url="https://www.tradingview.com/symbols/XAUUSD/?exchange=FX",
+        endpoint_url=f"{TEST_TRADINGVIEW_BASE_URL}/symbols/XAUUSD?exchange=FX",
         request_config={
-            "socket_url": "wss://data.tradingview.com/socket.io/websocket",
+            "socket_url": TEST_TRADINGVIEW_SOCKET_URL,
             "socket_from": "symbols/XAUUSD/",
             "auth": "unauthorized_user_token",
-            "origin": "https://www.tradingview.com",
+            "origin": TEST_TRADINGVIEW_ORIGIN,
             "user_agent": (
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -82,11 +86,11 @@ def _tradingview_history_source_snapshot() -> ExternalSourceSnapshot:
         id=2,
         source_key="tradingview.history",
         source_type="market_data",
-        endpoint_url="https://www.tradingview.com/symbols/XAUUSD/?exchange=FX",
+        endpoint_url=f"{TEST_TRADINGVIEW_BASE_URL}/symbols/XAUUSD?exchange=FX",
         request_config={
-            "http_url": "https://tvc4.tradingview.com/history",
-            "ws_url": "wss://data.tradingview.com/socket.io/websocket",
-            "origin": "https://www.tradingview.com",
+            "http_url": f"{TEST_TRADINGVIEW_BASE_URL}/history",
+            "ws_url": TEST_TRADINGVIEW_SOCKET_URL,
+            "origin": TEST_TRADINGVIEW_ORIGIN,
             "user_agent": (
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -240,10 +244,10 @@ def test_current_quote_provider_uses_tradingview_only_and_ignores_legacy_candida
     quote = provider.fetch()
 
     assert captured[0]["socket_url"].startswith(
-        "wss://data.tradingview.com/socket.io/websocket?from=symbols%2FXAUUSD%2F&date="
+        "wss://example.test/tradingview/socket?from=symbols%2FXAUUSD%2F&date="
     )
-    assert captured[0]["origin"] == "https://www.tradingview.com"
-    assert captured[0]["referer"] == "https://www.tradingview.com/symbols/XAUUSD/?exchange=FX"
+    assert captured[0]["origin"] == TEST_TRADINGVIEW_ORIGIN
+    assert captured[0]["referer"] == f"{TEST_TRADINGVIEW_BASE_URL}/symbols/XAUUSD?exchange=FX"
     assert quote.symbol == "XAUUSD"
     assert quote.current_price == 4427.31
     assert quote.data_source == "TradingView"
@@ -273,8 +277,8 @@ def test_tradingview_quote_provider_parses_quote_websocket_frames() -> None:
     assert quote.current_price == 4431.35
     assert quote.data_source == "TradingView"
     assert quote.data_timestamp.isoformat() == "2026-05-27T13:53:30+00:00"
-    assert captured[0]["origin"] == "https://www.tradingview.com"
-    assert captured[0]["referer"] == "https://www.tradingview.com/symbols/XAUUSD/?exchange=FX"
+    assert captured[0]["origin"] == TEST_TRADINGVIEW_ORIGIN
+    assert captured[0]["referer"] == f"{TEST_TRADINGVIEW_BASE_URL}/symbols/XAUUSD?exchange=FX"
 
 
 def test_tradingview_quote_provider_rejects_missing_lp_time() -> None:
@@ -330,7 +334,7 @@ def test_current_quote_provider_ignores_non_tradingview_url_override() -> None:
     quote = provider.fetch()
 
     assert captured[0]["socket_url"].startswith(
-        "wss://data.tradingview.com/socket.io/websocket?from=symbols%2FXAUUSD%2F&date="
+        "wss://example.test/tradingview/socket?from=symbols%2FXAUUSD%2F&date="
     )
     assert quote.symbol == "XAUUSD"
     assert quote.current_price == 4431.35

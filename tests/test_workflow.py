@@ -521,7 +521,7 @@ def test_agent_node_uses_configured_agent_api_without_leaking_key() -> None:
         )
 
     settings = GoldFXGraphSettings(
-        openai_base_url="https://agent.example.test/v1",
+        openai_base_url="https://example.test/v1",
         openai_model="gpt-4.1-mini",
         openai_api_key=SecretStr("secret-token"),
     )
@@ -543,7 +543,7 @@ def test_agent_node_uses_configured_agent_api_without_leaking_key() -> None:
 
     assert len(requests) == 1
     request = requests[0]
-    assert str(request.url) == "https://agent.example.test/v1/chat/completions"
+    assert str(request.url) == "https://example.test/v1/chat/completions"
     body = json.loads(request.content.decode())
     assert body["model"] == "gpt-4.1-mini"
     assert body["response_format"] == {"type": "json_object"}
@@ -664,7 +664,7 @@ def test_agent_node_uses_failure_summary_without_complete_openai_config() -> Non
             id=999,
             source_key=source_key,
             source_type="llm",
-            endpoint_url="https://agent.example.test/v1",
+            endpoint_url="https://example.test/v1",
             request_config={
                 "model": None,
                 "api_key": "secret-token",
@@ -684,7 +684,7 @@ def test_agent_node_uses_failure_summary_without_complete_openai_config() -> Non
     )
     state = WorkflowState(
         settings=GoldFXGraphSettings(
-            openai_base_url="https://agent.example.test/v1",
+            openai_base_url="https://example.test/v1",
             openai_model=None,
             openai_api_key=SecretStr("secret-token"),
         ),
@@ -726,7 +726,7 @@ def test_agent_node_reports_placeholder_secret_as_unconfigured() -> None:
             id=999,
             source_key=source_key,
             source_type="llm",
-            endpoint_url="https://agent.example.test/v1",
+            endpoint_url="https://example.test/v1",
             request_config={
                 "model": "gpt-4.1-mini",
                 "api_key": None,
@@ -746,7 +746,7 @@ def test_agent_node_reports_placeholder_secret_as_unconfigured() -> None:
     )
     state = WorkflowState(
         settings=GoldFXGraphSettings(
-            openai_base_url="https://agent.example.test/v1",
+            openai_base_url="https://example.test/v1",
             openai_model="gpt-4.1-mini",
             openai_api_key=SecretStr("change_me"),
         ),
@@ -846,7 +846,7 @@ def test_agent_node_falls_back_deterministically_when_openai_response_is_invalid
     repo, session_factory = asyncio.run(_runtime_repository())
     state = WorkflowState(
         settings=GoldFXGraphSettings(
-            openai_base_url="https://agent.example.test/v1",
+            openai_base_url="https://example.test/v1",
             openai_model="gpt-4.1-mini",
             openai_api_key=SecretStr("secret-token"),
         ),
@@ -914,19 +914,19 @@ def test_sentiment_and_alt_data_nodes_use_external_signals_when_available() -> N
 
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
-        if "DTWEXBGS" in url:
+        if "dollar-index" in url or "DTWEXBGS" in url:
             return httpx.Response(
                 200,
                 text="observation_date,DTWEXBGS\n2026-05-23,98.1254\n2026-05-22,98.0345\n",
                 request=request,
             )
-        if "DFII10" in url:
+        if "real-rates" in url or "DFII10" in url:
             return httpx.Response(
                 200,
                 text="observation_date,DFII10\n2026-05-23,2.145\n2026-05-22,2.158\n",
                 request=request,
             )
-        if request.url.host == "publicreporting.cftc.gov":
+        if request.url.host == "example.test":
             return httpx.Response(
                 200,
                 text=(
@@ -975,7 +975,7 @@ def test_polymarket_inputs_feed_market_sentiment_summary() -> None:
     repo, session_factory = asyncio.run(_runtime_repository())
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.host == "polymarket.com":
+        if request.url.host == "example.test":
             payload = json.dumps(
                 {
                     "props": {
@@ -1018,7 +1018,7 @@ def test_polymarket_inputs_feed_market_sentiment_summary() -> None:
                 ),
                 request=request,
             )
-        if request.url.host == "publicreporting.cftc.gov":
+        if request.url.host == "example.test":
             return httpx.Response(
                 200,
                 text=(
@@ -1071,7 +1071,7 @@ def test_newsflow_node_uses_mainstream_media_rss_when_available() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
-        if "cnbc.com" in url:
+        if "cnbc" in url:
             return httpx.Response(
                 200,
                 text=(
@@ -1087,7 +1087,7 @@ def test_newsflow_node_uses_mainstream_media_rss_when_available() -> None:
                 ),
                 request=request,
             )
-        if "marketwatch.com" in url:
+        if "marketwatch" in url:
             return httpx.Response(
                 200,
                 text=(
@@ -1100,7 +1100,7 @@ def test_newsflow_node_uses_mainstream_media_rss_when_available() -> None:
                 ),
                 request=request,
             )
-        if "news.google.com" in url:
+        if "google-news" in url:
             return httpx.Response(
                 200,
                 text=(
@@ -1146,7 +1146,7 @@ def test_pizza_index_node_uses_public_dashboard_snapshot_when_available() -> Non
 
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
-        if "pizzint.watch" in url:
+        if "pizzint" in url:
             return httpx.Response(
                 200,
                 text=(
@@ -1169,13 +1169,13 @@ def test_pizza_index_node_uses_public_dashboard_snapshot_when_available() -> Non
                 ),
                 request=request,
             )
-        if "DTWEXBGS" in url:
+        if "dollar-index" in url or "DTWEXBGS" in url:
             return httpx.Response(
                 200,
                 text="observation_date,DTWEXBGS\n2026-05-23,98.1254\n2026-05-22,98.0345\n",
                 request=request,
             )
-        if "DFII10" in url:
+        if "real-rates" in url or "DFII10" in url:
             return httpx.Response(
                 200,
                 text="observation_date,DFII10\n2026-05-23,2.145\n2026-05-22,2.158\n",
@@ -1216,7 +1216,7 @@ def test_market_sentiment_agent_ignores_blank_remote_summary(monkeypatch: pytest
     repo, session_factory = asyncio.run(_runtime_repository())
     state = WorkflowState(
         settings=GoldFXGraphSettings(
-            openai_base_url="https://agent.example.test/v1",
+            openai_base_url="https://example.test/v1",
             openai_model="gpt-4.1-mini",
             openai_api_key=SecretStr("secret-token"),
         ),

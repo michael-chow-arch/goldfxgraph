@@ -7,17 +7,21 @@ import pytest
 
 from goldfxgraph.persistence.external_source_registry import ExternalSourceSnapshot
 
+TEST_TRADINGVIEW_BASE_URL = "https://example.test/tradingview"
+TEST_TRADINGVIEW_ORIGIN = "https://example.test"
+TEST_TRADINGVIEW_SOCKET_URL = "wss://example.test/tradingview/socket"
+
 
 def _tradingview_history_source() -> ExternalSourceSnapshot:
     return ExternalSourceSnapshot(
         id=1,
         source_key="tradingview.history",
         source_type="market_data",
-        endpoint_url="https://www.tradingview.com/symbols/XAUUSD/?exchange=FX",
+        endpoint_url=f"{TEST_TRADINGVIEW_BASE_URL}/symbols/XAUUSD?exchange=FX",
         request_config={
-            "http_url": "https://tvc4.tradingview.com/history",
-            "ws_url": "wss://data.tradingview.com/socket.io/websocket",
-            "origin": "https://www.tradingview.com",
+            "http_url": f"{TEST_TRADINGVIEW_BASE_URL}/history",
+            "ws_url": TEST_TRADINGVIEW_SOCKET_URL,
+            "origin": TEST_TRADINGVIEW_ORIGIN,
             "user_agent": (
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -67,7 +71,7 @@ def test_fetch_gold_daily_bars_parses_valid_completed_rows_and_skips_invalid_one
     }
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/history"
+        assert request.url.path == "/tradingview/history"
         assert request.url.params["symbol"] == "XAUUSD"
         assert request.url.params["resolution"] == "D"
         assert request.url.params["from"] == str(period1)

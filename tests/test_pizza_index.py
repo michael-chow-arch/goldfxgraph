@@ -7,6 +7,8 @@ import httpx
 from goldfxgraph.persistence.external_source_registry import ExternalSourceSnapshot
 from goldfxgraph.market_data.pizza_index import fetch_pizza_index
 
+TEST_PIZZA_BASE_URL = "https://example.test/pizzint"
+
 
 def test_fetch_pizza_index_parses_public_dashboard_snapshot() -> None:
     html = (
@@ -28,14 +30,14 @@ def test_fetch_pizza_index_parses_public_dashboard_snapshot() -> None:
     )
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.host == "www.pizzint.watch"
+        assert request.url.host == "example.test"
         return httpx.Response(200, text=html, request=request)
 
     source = ExternalSourceSnapshot(
         id=1,
         source_key="alt.pizzint.watch",
         source_type="html",
-        endpoint_url="https://www.pizzint.watch/",
+        endpoint_url=f"{TEST_PIZZA_BASE_URL}/watch/",
         request_config={"source_name": "Pizzint Watch"},
         version="1.0.0",
         is_active=True,

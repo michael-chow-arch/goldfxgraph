@@ -39,7 +39,7 @@ async def _repository() -> tuple[ForecastRepository, object]:
 
 def _settings() -> GoldFXGraphSettings:
     return GoldFXGraphSettings(
-        openai_base_url="https://api.zhizengzeng.com/v1",
+        openai_base_url="https://example.test/v1",
         openai_model="gpt-5.1",
         openai_api_key=SecretStr("real-key"),
     )

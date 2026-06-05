@@ -6,6 +6,8 @@ import pytest
 from goldfxgraph.llm.openai_client import OpenAIAgentClient, OpenAIClientError
 from goldfxgraph.llm.openai_client import OpenAIAgentResult
 
+TEST_AGENT_BASE_URL = "https://example.test/v1"
+
 
 def test_openai_client_sends_bearer_header_and_parses_structured_result() -> None:
     requests: list[httpx.Request] = []
@@ -30,7 +32,7 @@ def test_openai_client_sends_bearer_header_and_parses_structured_result() -> Non
         )
 
     client = OpenAIAgentClient(
-        base_url="https://api.zhizengzeng.com/v1",
+        base_url=TEST_AGENT_BASE_URL,
         model="gpt-4.1-mini",
         api_key="super-secret-key",
         transport=httpx.MockTransport(handler),
@@ -52,7 +54,7 @@ def test_openai_client_sends_bearer_header_and_parses_structured_result() -> Non
 
     assert len(requests) == 1
     request = requests[0]
-    assert str(request.url) == "https://api.zhizengzeng.com/v1/chat/completions"
+    assert str(request.url) == f"{TEST_AGENT_BASE_URL}/chat/completions"
     assert request.headers["Authorization"] == "Bearer super-secret-key"
 
     payload = request.read().decode("utf-8")
@@ -68,7 +70,7 @@ def test_openai_client_rejects_non_json_response() -> None:
         return httpx.Response(200, content=b"not-json", request=request)
 
     client = OpenAIAgentClient(
-        base_url="https://api.zhizengzeng.com/v1",
+        base_url=TEST_AGENT_BASE_URL,
         model="gpt-4.1-mini",
         api_key="super-secret-key",
         transport=httpx.MockTransport(handler),
@@ -99,7 +101,7 @@ def test_openai_client_rejects_invalid_structured_payload() -> None:
         )
 
     client = OpenAIAgentClient(
-        base_url="https://api.zhizengzeng.com/v1",
+        base_url=TEST_AGENT_BASE_URL,
         model="gpt-4.1-mini",
         api_key="super-secret-key",
         transport=httpx.MockTransport(handler),
@@ -118,7 +120,7 @@ def test_openai_client_wraps_http_errors() -> None:
         return httpx.Response(400, json={"error": {"message": "Authorization is wrong"}}, request=request)
 
     client = OpenAIAgentClient(
-        base_url="https://api.zhizengzeng.com/v1",
+        base_url=TEST_AGENT_BASE_URL,
         model="gpt-4.1-mini",
         api_key="super-secret-key",
         transport=httpx.MockTransport(handler),
@@ -137,7 +139,7 @@ def test_openai_client_includes_request_error_chain_in_detail() -> None:
         raise httpx.ConnectError("connection refused", request=request)
 
     client = OpenAIAgentClient(
-        base_url="https://api.zhizengzeng.com/v1",
+        base_url=TEST_AGENT_BASE_URL,
         model="gpt-4.1-mini",
         api_key="super-secret-key",
         transport=httpx.MockTransport(handler),
@@ -171,7 +173,7 @@ def test_openai_client_normalizes_string_risk_notes_to_list() -> None:
         )
 
     client = OpenAIAgentClient(
-        base_url="https://api.zhizengzeng.com/v1",
+        base_url=TEST_AGENT_BASE_URL,
         model="gpt-4.1-mini",
         api_key="super-secret-key",
         transport=httpx.MockTransport(handler),
@@ -207,7 +209,7 @@ def test_openai_client_normalizes_conditional_direction_to_neutral() -> None:
         )
 
     client = OpenAIAgentClient(
-        base_url="https://api.zhizengzeng.com/v1",
+        base_url=TEST_AGENT_BASE_URL,
         model="gpt-4.1-mini",
         api_key="super-secret-key",
         transport=httpx.MockTransport(handler),

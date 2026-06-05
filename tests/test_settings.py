@@ -23,7 +23,7 @@ def test_settings_loads_from_explicit_env_file(tmp_path: Path) -> None:
                 "GOLDFXGRAPH_DATABASE_URL=postgresql+asyncpg://u:p@localhost:5432/db",
                 "GOLDFXGRAPH_XAUUSD_CSV_PATH=data/raw/xauusd_daily.csv",
                 "GOLDFXGRAPH_CURRENT_QUOTE_URL=https://example.test/quote",
-                "GOLDFXGRAPH_AGENT_API_BASE_URL=https://agent.example.test/v1",
+                "GOLDFXGRAPH_AGENT_API_BASE_URL=https://example.test/v1",
                 "GOLDFXGRAPH_AGENT_API_KEY=agent-key",
             ]
         ),
@@ -35,7 +35,7 @@ def test_settings_loads_from_explicit_env_file(tmp_path: Path) -> None:
     assert settings.env == "local"
     assert settings.log_level == "DEBUG"
     assert str(settings.xauusd_csv_path) == "data/raw/xauusd_daily.csv"
-    assert settings.agent_api_base_url == "https://agent.example.test/v1"
+    assert settings.agent_api_base_url == "https://example.test/v1"
     assert settings.agent_api_key is not None
     assert settings.agent_api_key.get_secret_value() == "agent-key"
 
@@ -56,7 +56,7 @@ def test_settings_treats_placeholder_secrets_as_unset(tmp_path: Path) -> None:
                 "GOLDFXGRAPH_AGENT_API_KEY=change_me",
                 "OPENAI_API_KEY=change_me",
                 "GOLDFXGRAPH_OPENAI_MODEL=gpt-5.1",
-                "GOLDFXGRAPH_OPENAI_BASE_URL=https://api.zhizengzeng.com/v1",
+                "GOLDFXGRAPH_OPENAI_BASE_URL=https://example.test/v1",
             ]
         ),
         encoding="utf-8",
@@ -67,7 +67,7 @@ def test_settings_treats_placeholder_secrets_as_unset(tmp_path: Path) -> None:
     assert settings.agent_api_key is None
     assert settings.openai_api_key is None
     assert settings.openai_model == "gpt-5.1"
-    assert settings.openai_base_url == "https://api.zhizengzeng.com/v1"
+    assert settings.openai_base_url == "https://example.test/v1"
 
 
 def test_settings_repr_does_not_expose_agent_key() -> None:
@@ -105,7 +105,7 @@ def test_settings_support_legacy_env_aliases(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://legacy:pw@localhost:5432/legacy_db")
     monkeypatch.setenv("OPENAI_API_KEY", "legacy-openai-key")
     monkeypatch.setenv("GOLDFXGRAPH_OPENAI_MODEL", "gpt-4.1-mini")
-    monkeypatch.setenv("GOLDFXGRAPH_OPENAI_BASE_URL", "https://api.zhizengzeng.com/v1")
+    monkeypatch.setenv("GOLDFXGRAPH_OPENAI_BASE_URL", "https://example.test/v1")
 
     settings = GoldFXGraphSettings()
 
@@ -113,7 +113,7 @@ def test_settings_support_legacy_env_aliases(monkeypatch: MonkeyPatch) -> None:
     assert settings.openai_api_key is not None
     assert settings.openai_api_key.get_secret_value() == "legacy-openai-key"
     assert settings.openai_model == "gpt-4.1-mini"
-    assert settings.openai_base_url == "https://api.zhizengzeng.com/v1"
+    assert settings.openai_base_url == "https://example.test/v1"
 
 
 def test_settings_prefers_goldfxgraph_database_url_over_legacy_alias(monkeypatch: MonkeyPatch) -> None:
@@ -138,7 +138,7 @@ def test_load_settings_supports_legacy_aliases_from_env_file(tmp_path: Path, mon
                 "DATABASE_URL=postgresql+asyncpg://legacy:pw@localhost:5432/legacy_db",
                 "OPENAI_API_KEY=legacy-openai-key",
                 "GOLDFXGRAPH_OPENAI_MODEL=gpt-5.1",
-                "GOLDFXGRAPH_OPENAI_BASE_URL=https://api.zhizengzeng.com/v1",
+                "GOLDFXGRAPH_OPENAI_BASE_URL=https://example.test/v1",
             ]
         ),
         encoding="utf-8",
@@ -150,7 +150,7 @@ def test_load_settings_supports_legacy_aliases_from_env_file(tmp_path: Path, mon
     assert settings.openai_api_key is not None
     assert settings.openai_api_key.get_secret_value() == "legacy-openai-key"
     assert settings.openai_model == "gpt-5.1"
-    assert settings.openai_base_url == "https://api.zhizengzeng.com/v1"
+    assert settings.openai_base_url == "https://example.test/v1"
 
 
 def test_load_settings_prefers_goldfxgraph_keys_over_legacy_aliases_in_env_file(

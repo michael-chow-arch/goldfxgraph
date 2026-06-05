@@ -14,8 +14,14 @@ from goldfxgraph.persistence.database import SessionFactory
 from goldfxgraph.persistence.models import ExternalSourceModel, PromptTemplateModel
 
 TEST_AGENT_MODEL = "gpt-4.1-mini"
-TEST_AGENT_BASE_URL = "https://agent.example.test/v1"
+TEST_AGENT_BASE_URL = "https://example.test/v1"
 TEST_AGENT_API_KEY = "secret-token"
+TEST_EXTERNAL_BASE_URL = "https://example.test"
+TEST_EXTERNAL_RSS_BASE_URL = "https://example.test/rss"
+TEST_EXTERNAL_DATA_BASE_URL = "https://example.test/data"
+TEST_TRADINGVIEW_BASE_URL = "https://example.test/tradingview"
+TEST_TRADINGVIEW_SOCKET_URL = "wss://example.test/tradingview/socket"
+TEST_TRADINGVIEW_ORIGIN = "https://example.test"
 
 TRADINGVIEW_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -202,12 +208,12 @@ def _external_source_models() -> list[ExternalSourceModel]:
         _external_source(
             source_key="tradingview.current_quote",
             source_type="market_data",
-            endpoint_url="https://www.tradingview.com/symbols/XAUUSD/?exchange=FX",
+            endpoint_url=f"{TEST_TRADINGVIEW_BASE_URL}/symbols/XAUUSD?exchange=FX",
             request_config={
-                "socket_url": "wss://data.tradingview.com/socket.io/websocket",
+                "socket_url": TEST_TRADINGVIEW_SOCKET_URL,
                 "socket_from": "symbols/XAUUSD/",
                 "auth": "unauthorized_user_token",
-                "origin": "https://www.tradingview.com",
+                "origin": TEST_TRADINGVIEW_ORIGIN,
                 "user_agent": TRADINGVIEW_USER_AGENT,
                 "symbol": "FX:XAUUSD",
                 "source_name": "TradingView",
@@ -216,11 +222,11 @@ def _external_source_models() -> list[ExternalSourceModel]:
         _external_source(
             source_key="tradingview.history",
             source_type="market_data",
-            endpoint_url="https://www.tradingview.com/symbols/XAUUSD/?exchange=FX",
+            endpoint_url=f"{TEST_TRADINGVIEW_BASE_URL}/symbols/XAUUSD?exchange=FX",
             request_config={
-                "http_url": "https://tvc4.tradingview.com/history",
-                "ws_url": "wss://data.tradingview.com/socket.io/websocket",
-                "origin": "https://www.tradingview.com",
+                "http_url": f"{TEST_TRADINGVIEW_BASE_URL}/history",
+                "ws_url": TEST_TRADINGVIEW_SOCKET_URL,
+                "origin": TEST_TRADINGVIEW_ORIGIN,
                 "user_agent": TRADINGVIEW_USER_AGENT,
                 "auth_token": "unauthorized_user_token",
                 "chart_symbol": "FX:XAUUSD",
@@ -235,43 +241,43 @@ def _external_source_models() -> list[ExternalSourceModel]:
         _external_source(
             source_key="newsflow.cnbc_markets",
             source_type="rss",
-            endpoint_url="https://www.cnbc.com/id/10000664/device/rss/rss.html",
+            endpoint_url=f"{TEST_EXTERNAL_RSS_BASE_URL}/cnbc/markets.xml",
             request_config={"source_name": "CNBC Markets"},
         ),
         _external_source(
             source_key="newsflow.marketwatch_top_stories",
             source_type="rss",
-            endpoint_url="https://feeds.marketwatch.com/marketwatch/topstories/",
+            endpoint_url=f"{TEST_EXTERNAL_RSS_BASE_URL}/marketwatch/topstories.xml",
             request_config={"source_name": "MarketWatch Top Stories"},
         ),
         _external_source(
             source_key="newsflow.google_news_gold",
             source_type="rss",
-            endpoint_url="https://news.google.com/rss/search?q=gold+when:1d&hl=en-US&gl=US&ceid=US:en",
+            endpoint_url=f"{TEST_EXTERNAL_RSS_BASE_URL}/google-news/gold.xml",
             request_config={"source_name": "Google News Gold"},
         ),
         _external_source(
             source_key="newsflow.google_news_rates",
             source_type="rss",
-            endpoint_url="https://news.google.com/rss/search?q=rates+when:1d&hl=en-US&gl=US&ceid=US:en",
+            endpoint_url=f"{TEST_EXTERNAL_RSS_BASE_URL}/google-news/rates.xml",
             request_config={"source_name": "Google News Rates"},
         ),
         _external_source(
             source_key="macro.fred.dollar_index",
             source_type="csv",
-            endpoint_url="https://fred.stlouisfed.org/graph/fredgraph.csv?id=DTWEXBGS",
+            endpoint_url=f"{TEST_EXTERNAL_DATA_BASE_URL}/fred/dollar-index.csv",
             request_config={},
         ),
         _external_source(
             source_key="macro.fred.real_rates",
             source_type="csv",
-            endpoint_url="https://fred.stlouisfed.org/graph/fredgraph.csv?id=DFII10",
+            endpoint_url=f"{TEST_EXTERNAL_DATA_BASE_URL}/fred/real-rates.csv",
             request_config={},
         ),
         _external_source(
             source_key="macro.cftc.gold_commitments",
             source_type="csv",
-            endpoint_url="https://publicreporting.cftc.gov/resource/6dca-aqww.csv",
+            endpoint_url=f"{TEST_EXTERNAL_DATA_BASE_URL}/cftc/gold-commitments.csv",
             request_config={
                 "params": {
                     "$where": "commodity_name='GOLD'",
@@ -283,13 +289,13 @@ def _external_source_models() -> list[ExternalSourceModel]:
         _external_source(
             source_key="alt.pizzint.watch",
             source_type="html",
-            endpoint_url="https://pizzint.watch/",
+            endpoint_url=f"{TEST_EXTERNAL_BASE_URL}/pizzint.watch/",
             request_config={"source_name": "Pizzint Watch"},
         ),
         _external_source(
             source_key="alt.polymarket.zh",
             source_type="html",
-            endpoint_url="https://polymarket.com/category/gold",
+            endpoint_url=f"{TEST_EXTERNAL_BASE_URL}/polymarket/gold",
             request_config={"source_name": "Polymarket"},
         ),
     ]
